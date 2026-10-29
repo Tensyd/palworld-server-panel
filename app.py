@@ -100,7 +100,10 @@ UPDATE_LOG = Path(os.environ.get("PANEL_UPDATE_LOG", "/home/demo/palworld-panel/
 PALWORLD_UPDATE_REQUEST = Path(os.environ.get("PALWORLD_UPDATE_REQUEST_FILE", str(PALWORLD_DIR / ".panel-update-request")))
 DOCKER_STEAMCMD_LOG = Path(os.environ.get("STEAMCMD_UPDATE_LOG", str(PALWORLD_DIR / ".panel-steamcmd-update.log")))
 UPDATE_SERVICE = os.environ.get("PANEL_UPDATE_SERVICE", "palworld-panel-update.service")
+UPDATE_AUTO_SERVICE = os.environ.get("PANEL_AUTO_UPDATE_SERVICE", "palworld-panel-auto-update.service")
 UPDATE_TIMER = os.environ.get("PANEL_UPDATE_TIMER", "palworld-panel-update.timer")
+# 状态文件说"在跑"但后台进程已经不在时，多久之后回收成失败状态。
+UPDATE_STALE_GRACE_SECONDS = int(os.environ.get("PANEL_UPDATE_STALE_GRACE_SECONDS", "90"))
 INSTALL_SCRIPT = Path(os.environ.get("PANEL_INSTALL_SCRIPT", "/home/demo/palworld-panel/panel_install.py"))
 INSTALL_STATUS = Path(os.environ.get("PANEL_INSTALL_STATUS", "/home/demo/palworld-panel/install-status.json"))
 INSTALL_LOG = Path(os.environ.get("PANEL_INSTALL_LOG", "/home/demo/palworld-panel/install.log"))
@@ -304,6 +307,20 @@ def run_command(args: list[str], timeout: int = 30, sudo: bool = False) -> tuple
 
 
 def systemctl(*args: str, timeout: int = 30) -> tuple[str, str, int]:
+    return run_command([SYSTEMCTL, *args], timeout=timeout, sudo=True)
+
+
+def systemctl_query(*args: str, timeout: int = 15) -> tuple[str, str, int]:
+    """Read-only systemctl queries (``is-active`` & friends) need no root.
+
+    Routing them through ``sudo -n`` meant that a missing or mismatched
+    ``/etc/sudoers.d/palworld-panel`` made every query fail, which was then
+    read as "the service is not running". The updater trusted that answer and
+    overwrote the game files underneath a live server.
+    """
+    out, err, code = run_command([SYSTEMCTL, *args], timeout=timeout, sudo=False)
+    if out or err or code in (0, 3, 4):
+        return out, err, code
     return run_command([SYSTEMCTL, *args], timeout=timeout, sudo=True)
 
 
@@ -866,6 +883,25 @@ def reconcile_docker_update_status(update_status: dict[str, Any]) -> dict[str, A
     return update_status
 
 
+def reconcile_systemd_update_status(update_status: dict[str, Any], service_active: bool) -> dict[str, Any]:
+    """回收「状态说运行中、进程其实已经不在」的残留 running 标记。
+
+    没有这一步，任何一次被 systemd 超时终止（或主机重启）的更新都会让面板
+    永远停在"更新进行中"：按钮是灰的，每 30 分钟的定时任务也永远等不到结束。
+    """
+    if not update_status.get("running") or service_active:
+        return update_status
+    started = parse_iso_timestamp(update_status.get("started_at"))
+    if started and time.time() - started < UPDATE_STALE_GRACE_SECONDS:
+        return update_status
+    message = "后台更新进程已退出但没有写入结果（可能被 systemd 超时终止或主机重启），请查看 update.log 后重试"
+    steps = [item for item in update_status.get("steps", []) if item.get("name") != "failed"]
+    steps.append({"name": "failed", "status": "error", "message": message, "time": iso_now()})
+    update_status.update(running=False, phase="failed", finished_at=iso_now(), success=False, message=message, steps=steps)
+    write_json(UPDATE_STATUS, update_status)
+    return update_status
+
+
 def read_update_status() -> dict[str, Any]:
     status = read_json(UPDATE_STATUS, {})
     if using_docker_backend():
@@ -886,12 +922,17 @@ def read_update_status() -> dict[str, Any]:
         )
         return status
 
-    active, _, _ = systemctl("is-active", UPDATE_SERVICE, timeout=10)
-    timer_active, _, _ = systemctl("is-active", UPDATE_TIMER, timeout=10)
+    active, _, _ = systemctl_query("is-active", UPDATE_SERVICE, timeout=10)
+    auto_active, _, _ = systemctl_query("is-active", UPDATE_AUTO_SERVICE, timeout=10)
+    timer_active, _, _ = systemctl_query("is-active", UPDATE_TIMER, timeout=10)
+    auto_service_active = auto_active.strip() == "active"
+    service_active = active.strip() == "active" or auto_service_active
+    status = reconcile_systemd_update_status(status, service_active)
     status.update(
         {
             "backend": "systemd",
-            "service_active": active.strip() == "active",
+            "service_active": service_active,
+            "auto_service_active": auto_service_active,
             "timer_active": timer_active.strip() == "active",
             "log_tail": tail_text(UPDATE_LOG, 80),
         }
@@ -1096,10 +1137,13 @@ def start_update_service() -> tuple[bool, str]:
         threading.Thread(target=run_update, name="palworld-update", daemon=True).start()
         return True, "更新任务已在后台启动；面板会在目标 Manifest 验证后才显示完成"
 
-    active, _, _ = systemctl("is-active", UPDATE_SERVICE, timeout=10)
-    if active.strip() == "active":
+    active, _, _ = systemctl_query("is-active", UPDATE_SERVICE, timeout=10)
+    auto_active, _, _ = systemctl_query("is-active", UPDATE_AUTO_SERVICE, timeout=10)
+    if active.strip() == "active" or auto_active.strip() == "active":
         return False, "更新任务正在运行"
     update_status = read_update_status()
+    if update_status.get("running"):
+        return False, "更新任务正在运行（状态文件标记为运行中，请稍后再试或查看 update.log）"
     if not update_status.get("update_available"):
         return False, "当前没有检测到可用更新，请先点击检查更新"
     _, err, code = systemctl("start", UPDATE_SERVICE, timeout=20)
@@ -1157,7 +1201,7 @@ def read_install_status() -> dict[str, Any]:
         }
 
     status = read_json(INSTALL_STATUS, {})
-    active, _, _ = systemctl("is-active", INSTALL_SERVICE, timeout=10)
+    active, _, _ = systemctl_query("is-active", INSTALL_SERVICE, timeout=10)
     status.update(
         {
             "service_active": active.strip() == "active",
@@ -1182,7 +1226,7 @@ def start_install_service(action: str) -> tuple[bool, str]:
         return False, "Docker 模式不在面板内执行 systemd 安装；请使用 docker compose 管理部署"
     if action not in {"install-palworld", "repair"}:
         return False, "unsupported installer action"
-    active, _, _ = systemctl("is-active", INSTALL_SERVICE, timeout=10)
+    active, _, _ = systemctl_query("is-active", INSTALL_SERVICE, timeout=10)
     if active.strip() == "active":
         return False, "安装任务正在运行"
     write_json(INSTALL_REQUEST, {"action": action, "requested_at": iso_now()})
@@ -2418,7 +2462,7 @@ def get_server_status() -> dict[str, Any]:
                 "error": str(exc),
             }
 
-    out, _, _ = systemctl("is-active", PALWORLD_SERVICE, timeout=10)
+    out, _, _ = systemctl_query("is-active", PALWORLD_SERVICE, timeout=10)
     running = out.strip() == "active"
     pid = ""
     start_time = ""

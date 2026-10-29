@@ -432,8 +432,13 @@ EnvironmentFile={ENV_FILE}
 ExecStart=/usr/bin/python3 {PANEL_DIR}/panel_install.py --service
 TimeoutStartSec=7200
 """
+    # The updater never had a retry budget of its own before, so 90 minutes was
+    # also the hard ceiling for a 3-attempt SteamCMD run plus the player
+    # countdown. `EnvironmentFile=-` keeps the unit startable when the env file
+    # is missing or unreadable instead of failing with "Failed to load
+    # environment files".
     update_service = f"""[Unit]
-Description=Palworld Panel Background Updater
+Description=Palworld Panel Background Updater (manual)
 After=network-online.target
 Wants=network-online.target
 
@@ -442,9 +447,28 @@ Type=oneshot
 User={PANEL_USER}
 Group={PANEL_USER}
 WorkingDirectory={PANEL_DIR}
-EnvironmentFile={ENV_FILE}
+EnvironmentFile=-{ENV_FILE}
 ExecStart=/usr/bin/python3 {PANEL_DIR}/panel_update.py --apply
-TimeoutStartSec=5400
+TimeoutStartSec=7200
+TimeoutStopSec=120
+KillMode=mixed
+Nice=5
+"""
+    auto_update_service = f"""[Unit]
+Description=Palworld Panel Background Updater (scheduled)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={PANEL_USER}
+Group={PANEL_USER}
+WorkingDirectory={PANEL_DIR}
+EnvironmentFile=-{ENV_FILE}
+ExecStart=/usr/bin/python3 {PANEL_DIR}/panel_update.py --auto
+TimeoutStartSec=7200
+TimeoutStopSec=120
+KillMode=mixed
 Nice=5
 """
     update_timer = """[Unit]
@@ -455,7 +479,7 @@ OnBootSec=5min
 OnUnitActiveSec=30min
 AccuracySec=1min
 Persistent=false
-Unit=palworld-panel-update.service
+Unit=palworld-panel-auto-update.service
 
 [Install]
 WantedBy=timers.target
@@ -465,6 +489,7 @@ WantedBy=timers.target
     Path("/etc/systemd/system/palworld-panel.service").write_text(panel_service, encoding="utf-8")
     Path("/etc/systemd/system/palworld-panel-install.service").write_text(install_service, encoding="utf-8")
     Path("/etc/systemd/system/palworld-panel-update.service").write_text(update_service, encoding="utf-8")
+    Path("/etc/systemd/system/palworld-panel-auto-update.service").write_text(auto_update_service, encoding="utf-8")
     Path("/etc/systemd/system/palworld-panel-update.timer").write_text(update_timer, encoding="utf-8")
 
     sudoers = f"""{PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start palworld.service
@@ -477,6 +502,8 @@ WantedBy=timers.target
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/chown -R {PANEL_USER}\\:{PANEL_USER} {PALWORLD_DIR}/Pal/Saved/Config/LinuxServer
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start palworld-panel-update.service
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active palworld-panel-update.service
+{PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start palworld-panel-auto-update.service
+{PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active palworld-panel-auto-update.service
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active palworld-panel-update.timer
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start palworld-panel-install.service
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active palworld-panel-install.service

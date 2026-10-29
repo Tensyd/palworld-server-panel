@@ -1,0 +1,17 @@
+[Unit]
+Description=Palworld Panel Background Updater (scheduled)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=demo
+Group=demo
+WorkingDirectory=/home/demo/palworld-panel
+EnvironmentFile=-/etc/palworld-panel.env
+# --auto honours AUTO_UPDATE_ENABLED; the manual unit above always updates.
+ExecStart=/usr/bin/python3 /home/demo/palworld-panel/panel_update.py --auto
+TimeoutStartSec=7200
+TimeoutStopSec=120
+KillMode=mixed
+Nice=5

@@ -113,6 +113,44 @@ sudo bash install.sh
 
 更多说明见 [systemd 部署文档](docs/SYSTEMD.md)。
 
+## 自动更新
+
+原生 systemd 部署有两个更新入口，别混用：
+
+```bash
+# 定时检测（每 30 分钟），是否真正执行更新由 AUTO_UPDATE_ENABLED 决定
+systemctl status palworld-panel-update.timer
+journalctl -u palworld-panel-auto-update.service -n 100
+
+# 面板上点“立即后台更新”走这个单元，不受 AUTO_UPDATE_ENABLED 限制
+systemctl status palworld-panel-update.service
+```
+
+开启自动应用（默认关闭）：
+
+```bash
+sudo sed -i 's/^AUTO_UPDATE_ENABLED=.*/AUTO_UPDATE_ENABLED=true/' /etc/palworld-panel.env
+sudo systemctl restart palworld-panel.service
+```
+
+关闭时定时器仍会每 30 分钟检测一次版本，面板照常显示“发现新版本”，只是不会自动停服更新。
+
+完整流程：检测 → 广播倒计时 → RCON 保存 → 停服 → 备份存档 → SteamCMD → 修复权限 → 启动 → 复核 manifest。SteamCMD 固定 `-tcp`，默认重试 3 次、单次上限 30 分钟，遇到 `Access Denied` 或 `StateFlags=6` 会自动把旧 `appmanifest` 改名重建，避免“永远更新失败”的死循环。
+
+可调参数（写进 `/etc/palworld-panel.env`）：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `AUTO_UPDATE_ENABLED` | `false` | 定时任务是否自动应用更新 |
+| `AUTO_UPDATE_WARN_MINUTES` | `10` | 有人在线的广播倒计时分钟数 |
+| `STEAMCMD_RETRIES` | `3` | SteamCMD 重试次数 |
+| `STEAMCMD_ATTEMPT_TIMEOUT` | `1800` | 单次 SteamCMD 超时（秒） |
+| `STEAMCMD_TCP` | `true` | 强制 SteamCMD 走 TCP |
+| `RCON_SAVE_REQUIRED` | `false` | RCON 保存失败是否中断更新 |
+| `STEAM_MANIFEST_URL` | `https://api.steamcmd.net/v1/info/{app}` | 版本检测接口，可换镜像 |
+
+排查顺序：先看 `journalctl -u palworld-panel-auto-update.service -n 200`，再翻 `/home/demo/palworld-panel/update.log` 里的 `steamcmd:` 行，那里有每次尝试的原始输出。
+
 ## 数据目录
 
 Docker 模式默认使用：

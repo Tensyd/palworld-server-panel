@@ -1654,7 +1654,7 @@ async function applyUpdateNow() {
 
     const button = $("#applyUpdateBtn");
     if (button) button.classList.add("is-busy");
-    openProgressDialog("Palworld 后台更新", ["检测版本", "通知玩家", "保存世界", "备份存档", "停止服务", "SteamCMD 更新", "修复权限", "启动服务", "完成"], "更新会在 systemd 后台执行，面板会持续读取进度。");
+    openProgressDialog("Palworld 后台更新", ["检测版本", "通知玩家", "保存世界", "停止服务", "备份存档", "SteamCMD 更新", "修复权限", "启动服务", "完成"], "更新会在 systemd 后台执行，面板会持续读取进度。");
     try {
         const data = await api("/api/update/apply", { method: "POST" });
         renderUpdateStatus(data.status || {});
@@ -1670,7 +1670,7 @@ async function applyUpdateNow() {
 }
 
 async function pollUpdateProgress() {
-    const map = ["detect", "notify", "save", "backup", "stop", "update", "permissions", "start", "complete"];
+    const map = ["detect", "notify", "save", "stop", "backup", "update", "permissions", "start", "complete"];
     for (let attempt = 0; attempt < 240; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 3000));
         await loadUpdateStatus(false);
