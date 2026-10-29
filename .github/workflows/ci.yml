@@ -40,20 +40,6 @@ jobs:
         # 3.10 is the floor claimed by the README badge; 3.13 is what dev runs.
         python-version: ["3.10", "3.13"]
 
-    # The suite must not assume /home/demo exists or is writable -- CI runners
-    # are not root. Point every writable path at a temp directory instead.
-    env:
-      PALWORLD_DIR: ${{ runner.temp }}/panel-ci/palworld
-      CONFIG_BACKUP_DIR: ${{ runner.temp }}/panel-ci/panel/config-backups
-      AUDIT_LOG: ${{ runner.temp }}/panel-ci/panel/audit.log
-      SAVE_SLOT_ROOT: ${{ runner.temp }}/panel-ci/panel/save-slots
-      MOD_LIBRARY_ROOT: ${{ runner.temp }}/panel-ci/panel/mod-library
-      PANEL_UPDATE_STATUS: ${{ runner.temp }}/panel-ci/panel/update-status.json
-      PANEL_UPDATE_LOG: ${{ runner.temp }}/panel-ci/panel/update.log
-      PANEL_INSTALL_STATUS: ${{ runner.temp }}/panel-ci/panel/install-status.json
-      PANEL_INSTALL_LOG: ${{ runner.temp }}/panel-ci/panel/install.log
-      PANEL_SECRET_KEY: ci-test-secret
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -71,4 +57,18 @@ jobs:
           python -m pip install -r requirements.txt pytest
 
       - name: Run tests
+        # The suite must not assume /home/demo exists or is writable -- CI
+        # runners are not root. Point every writable path at a temp directory.
+        # (The runner context is only available at step level, not job level.)
+        env:
+          PALWORLD_DIR: ${{ runner.temp }}/panel-ci/palworld
+          CONFIG_BACKUP_DIR: ${{ runner.temp }}/panel-ci/panel/config-backups
+          AUDIT_LOG: ${{ runner.temp }}/panel-ci/panel/audit.log
+          SAVE_SLOT_ROOT: ${{ runner.temp }}/panel-ci/panel/save-slots
+          MOD_LIBRARY_ROOT: ${{ runner.temp }}/panel-ci/panel/mod-library
+          PANEL_UPDATE_STATUS: ${{ runner.temp }}/panel-ci/panel/update-status.json
+          PANEL_UPDATE_LOG: ${{ runner.temp }}/panel-ci/panel/update.log
+          PANEL_INSTALL_STATUS: ${{ runner.temp }}/panel-ci/panel/install-status.json
+          PANEL_INSTALL_LOG: ${{ runner.temp }}/panel-ci/panel/install.log
+          PANEL_SECRET_KEY: ci-test-secret
         run: python -m pytest tests/ -q --tb=short
