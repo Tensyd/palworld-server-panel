@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import importlib.util
 import io
 from pathlib import Path
@@ -309,6 +310,18 @@ class ConfigAndStatusTests(unittest.TestCase):
             result = app.reconcile_systemd_update_status({"running": True, "started_at": app.iso_now()}, service_active=False)
         self.assertTrue(result["running"])
         write_json.assert_not_called()
+
+    def test_parse_iso_timestamp_accepts_strftime_offsets(self):
+        # iso_now() emits "+0800"; Python 3.10's fromisoformat rejects that form
+        # and used to turn every updater timestamp into 0.0.
+        expected = datetime(2026, 10, 29, 12, 24, 12, tzinfo=timezone.utc).timestamp()
+        self.assertAlmostEqual(app.parse_iso_timestamp("2026-10-29T20:24:12+0800"), expected, places=0)
+        self.assertGreater(app.parse_iso_timestamp("2026-10-29T20:24:12+00:00"), 0)
+        self.assertGreater(app.parse_iso_timestamp("2026-10-29T12:24:12Z"), 0)
+        self.assertGreater(app.parse_iso_timestamp(app.iso_now()), 0)
+        self.assertEqual(app.parse_iso_timestamp(None), 0.0)
+        self.assertEqual(app.parse_iso_timestamp(""), 0.0)
+        self.assertEqual(app.parse_iso_timestamp("not a timestamp"), 0.0)
 
 
 if __name__ == "__main__":

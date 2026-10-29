@@ -833,9 +833,21 @@ def run_docker_update_check() -> dict[str, Any]:
     return status
 
 
+ISO_OFFSET_WITHOUT_COLON = re.compile(r"([+-]\d{2})(\d{2})$")
+
+
 def parse_iso_timestamp(value: Any) -> float:
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    # iso_now() formats with %z, which emits "+0800". fromisoformat() only
+    # accepts that colon-less form from Python 3.11 on, so every timestamp
+    # written by the updater parsed as 0.0 on 3.10 (Ubuntu 22.04's default).
+    text = ISO_OFFSET_WITHOUT_COLON.sub(r"\1:\2", text)
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+        return datetime.fromisoformat(text).timestamp()
     except (TypeError, ValueError):
         return 0.0
 
