@@ -6,7 +6,7 @@ OnBootSec=5min
 OnUnitActiveSec=30min
 AccuracySec=1min
 Persistent=false
-Unit=palworld-panel-update.service
+Unit=palworld-panel-auto-update.service
 
 [Install]
 WantedBy=timers.target
