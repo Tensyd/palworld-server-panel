@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-[![CI](https://github.com/tsd-12356/palworld-server-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/tsd-12356/palworld-server-panel/actions/workflows/ci.yml)
+[![CI](https://github.com/Tensyd/palworld-server-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/Tensyd/palworld-server-panel/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Docker Compose](https://img.shields.io/badge/deploy-Docker%20Compose-2496ED.svg)](docs/DOCKER.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](requirements.txt)
@@ -67,7 +67,7 @@
 适合大多数开源用户。
 
 ```bash
-git clone https://github.com/tsd-12356/palworld-server-panel.git
+git clone https://github.com/Tensyd/palworld-server-panel.git
 cd palworld-server-panel
 cp .env.example .env
 ```
@@ -106,7 +106,7 @@ location / {
 适合直接部署在 VPS 上，使用 systemd 管理服务。
 
 ```bash
-git clone https://github.com/tsd-12356/palworld-server-panel.git
+git clone https://github.com/Tensyd/palworld-server-panel.git
 cd palworld-server-panel
 sudo bash install.sh
 ```
@@ -231,7 +231,7 @@ journalctl -u palworld.service -f
 ## 版本状态
 
 - systemd 模式已在真实服务器验证。
-- Docker Compose 是推荐部署方式，当前版本为 beta，建议首次部署时先观察 `palworld` 容器日志，确认服务端下载和启动完成。
+- Docker Compose 是推荐部署方式，当前版本为 v2.0.1，建议首次部署或升级后先观察 `palworld` 容器日志，确认服务端下载和启动完成。
 - MOD 管理是 2.0 实验性功能，已覆盖 `.pak` 上传、启用、禁用、删除、清理废纸篓和官方 `Info.json` zip 导入流程；不同 MOD 是否能在 Linux/Docker 服务端正常工作，需要按 MOD 作者说明自行验证。
 - 面板默认不包含登录系统，适合自用、内网、Tailscale、ZeroTier 或可信反代环境。
 - 欢迎通过 Issue 反馈 Docker 部署、systemd 安装、存档管理、配置编辑或 UI 体验问题。

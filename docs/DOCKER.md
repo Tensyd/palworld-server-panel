@@ -16,7 +16,7 @@ Docker Compose 是推荐部署方式。它会启动两个容器：
 ## 快速开始
 
 ```bash
-git clone https://github.com/tsd-12356/palworld-server-panel.git
+git clone https://github.com/Tensyd/palworld-server-panel.git
 cd palworld-server-panel
 cp .env.example .env
 ```

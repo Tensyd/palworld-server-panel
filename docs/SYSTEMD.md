@@ -10,7 +10,7 @@
 ## 快速开始
 
 ```bash
-git clone https://github.com/tsd-12356/palworld-server-panel.git
+git clone https://github.com/Tensyd/palworld-server-panel.git
 cd palworld-server-panel
 sudo bash install.sh
 ```

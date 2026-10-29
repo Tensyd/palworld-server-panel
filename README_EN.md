@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-[![CI](https://github.com/tsd-12356/palworld-server-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/tsd-12356/palworld-server-panel/actions/workflows/ci.yml)
+[![CI](https://github.com/Tensyd/palworld-server-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/Tensyd/palworld-server-panel/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Docker Compose](https://img.shields.io/badge/deploy-Docker%20Compose-2496ED.svg)](docs/DOCKER.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](requirements.txt)
@@ -67,7 +67,7 @@ A modern web panel for managing a Palworld Dedicated Server. It focuses on **aut
 This is the recommended deployment method for most users.
 
 ```bash
-git clone https://github.com/tsd-12356/palworld-server-panel.git
+git clone https://github.com/Tensyd/palworld-server-panel.git
 cd palworld-server-panel
 cp .env.example .env
 ```
@@ -106,12 +106,50 @@ See the [Docker deployment guide](docs/DOCKER.md) for details.
 Use this option to deploy directly on a VPS with systemd-managed services.
 
 ```bash
-git clone https://github.com/tsd-12356/palworld-server-panel.git
+git clone https://github.com/Tensyd/palworld-server-panel.git
 cd palworld-server-panel
 sudo bash install.sh
 ```
 
 See the [systemd deployment guide](docs/SYSTEMD.md) for details.
+
+## Auto Update
+
+Native systemd deployments have two separate update entry points. Do not confuse them:
+
+```bash
+# Scheduled check (every 30 minutes); AUTO_UPDATE_ENABLED decides whether to apply
+systemctl status palworld-panel-update.timer
+journalctl -u palworld-panel-auto-update.service -n 100
+
+# "Update now" in the panel starts this unit and ignores AUTO_UPDATE_ENABLED
+systemctl status palworld-panel-update.service
+```
+
+Enable automatic apply (off by default):
+
+```bash
+sudo sed -i 's/^AUTO_UPDATE_ENABLED=.*/AUTO_UPDATE_ENABLED=true/' /etc/palworld-panel.env
+sudo systemctl restart palworld-panel.service
+```
+
+With it disabled the timer still checks every 30 minutes, so the panel keeps reporting "update available" — it just will not stop your server on its own.
+
+Full flow: detect → broadcast countdown → RCON save → stop → back up saves → SteamCMD → fix ownership → start → verify manifest. SteamCMD always uses `-tcp`, retries three times with a 30 minute cap per attempt, and moves a stale `appmanifest` aside when it sees `Access Denied` or `StateFlags=6` instead of failing forever.
+
+Tunables (set in `/etc/palworld-panel.env`):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AUTO_UPDATE_ENABLED` | `false` | Whether the timer applies updates |
+| `AUTO_UPDATE_WARN_MINUTES` | `10` | In-game countdown when players are online |
+| `STEAMCMD_RETRIES` | `3` | SteamCMD attempt count |
+| `STEAMCMD_ATTEMPT_TIMEOUT` | `1800` | Per-attempt timeout in seconds |
+| `STEAMCMD_TCP` | `true` | Force SteamCMD over TCP |
+| `RCON_SAVE_REQUIRED` | `false` | Abort the update when the RCON save fails |
+| `STEAM_MANIFEST_URL` | `https://api.steamcmd.net/v1/info/{app}` | Version check endpoint, may point at a mirror |
+
+Troubleshooting: start with `journalctl -u palworld-panel-auto-update.service -n 200`, then look for the `steamcmd:` lines in `/home/demo/palworld-panel/update.log` — that is where each attempt's raw output lands.
 
 ## Data Directories
 
@@ -193,7 +231,7 @@ If you intend to expose the panel to the public internet, add authentication and
 ## Project Status
 
 - The systemd deployment has been validated on a real server.
-- Docker Compose is the recommended deployment method. The project is currently in beta; on first deployment, monitor the `palworld` container logs until the server download and startup complete.
+- Docker Compose is the recommended deployment method; the current release is v2.0.1. On first deployment or after an upgrade, monitor the `palworld` container logs until the server download and startup complete.
 - Mod management is experimental in 2.0. Upload, enable, disable, delete, trash cleanup, and official `Info.json` ZIP import flows have been tested, but individual mod compatibility on Linux or Docker must be verified against the mod author's instructions.
 - The panel does not include authentication and is intended for personal use, private networks, Tailscale, ZeroTier, or trusted reverse proxies.
 - Issues covering Docker deployment, systemd installation, save management, configuration, and UI behavior are welcome.
