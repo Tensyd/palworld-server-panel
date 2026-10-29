@@ -375,8 +375,13 @@ def reconfigure_option(text: str, admin_password: str) -> str:
     return text
 
 
-def write_service_files() -> None:
-    status.step("systemd", "active", "Installing systemd units and sudoers")
+def render_service_files() -> dict[str, str]:
+    """Build the systemd units as plain strings.
+
+    Kept pure (no writes, no root) so the unit contents can be asserted in
+    tests -- ``deploy/`` only holds reference copies and used to drift from
+    what the installer actually wrote.
+    """
     palworld_service = f"""[Unit]
 Description=Palworld Dedicated Server
 After=network.target
@@ -485,14 +490,18 @@ Unit=palworld-panel-auto-update.service
 WantedBy=timers.target
 """
 
-    Path("/etc/systemd/system/palworld.service").write_text(palworld_service, encoding="utf-8")
-    Path("/etc/systemd/system/palworld-panel.service").write_text(panel_service, encoding="utf-8")
-    Path("/etc/systemd/system/palworld-panel-install.service").write_text(install_service, encoding="utf-8")
-    Path("/etc/systemd/system/palworld-panel-update.service").write_text(update_service, encoding="utf-8")
-    Path("/etc/systemd/system/palworld-panel-auto-update.service").write_text(auto_update_service, encoding="utf-8")
-    Path("/etc/systemd/system/palworld-panel-update.timer").write_text(update_timer, encoding="utf-8")
+    return {
+        "palworld.service": palworld_service,
+        "palworld-panel.service": panel_service,
+        "palworld-panel-install.service": install_service,
+        "palworld-panel-update.service": update_service,
+        "palworld-panel-auto-update.service": auto_update_service,
+        "palworld-panel-update.timer": update_timer,
+    }
 
-    sudoers = f"""{PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start palworld.service
+
+def render_sudoers() -> str:
+    return f"""{PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start palworld.service
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl stop palworld.service
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart palworld.service
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active palworld.service
@@ -508,8 +517,14 @@ WantedBy=timers.target
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start palworld-panel-install.service
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active palworld-panel-install.service
 """
+
+
+def write_service_files() -> None:
+    status.step("systemd", "active", "Installing systemd units and sudoers")
+    for name, content in render_service_files().items():
+        Path(f"/etc/systemd/system/{name}").write_text(content, encoding="utf-8")
     sudoers_path = Path("/etc/sudoers.d/palworld-panel")
-    sudoers_path.write_text(sudoers, encoding="utf-8")
+    sudoers_path.write_text(render_sudoers(), encoding="utf-8")
     run_checked(["chmod", "440", str(sudoers_path)], timeout=30)
     run_checked(["visudo", "-cf", str(sudoers_path)], timeout=30)
     run_checked(["systemctl", "daemon-reload"], timeout=60)

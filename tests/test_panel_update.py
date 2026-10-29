@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from pathlib import Path
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -183,6 +184,44 @@ class PanelUpdateTests(unittest.TestCase):
         ), patch.object(panel_update.time, "sleep"):
             with self.assertRaisesRegex(RuntimeError, "No subscription"):
                 panel_update.run_steam_update("target")
+
+    def test_scheduled_run_with_auto_disabled_still_reports_the_detection(self):
+        """Timer runs must keep the "update available" badge alive even when off."""
+        with patch.object(panel_update, "AUTO_UPDATE_ENABLED", False), patch.object(
+            panel_update, "operation_lock", return_value=nullcontext()
+        ), patch.object(panel_update, "check_update", return_value={"update_available": True, "latest_manifest": "new"}), patch.object(
+            panel_update, "append_audit"
+        ), patch.object(panel_update, "log"), patch.object(
+            panel_update, "is_service_running"
+        ) as is_service_running:
+            panel_update.apply_update(auto=True)
+        is_service_running.assert_not_called()
+        payload = panel_update.status.payload
+        self.assertTrue(payload["update_available"])
+        self.assertEqual(payload["phase"], "checked")
+        self.assertFalse(payload["running"])
+        self.assertIn("自动更新已关闭", payload["message"])
+
+    def test_steamcmd_watchdog_terminates_a_hung_child(self):
+        """A hung SteamCMD has to be killed, not abandoned holding the files."""
+        script = (
+            "import time\n"
+            "print('Connecting to Steam...', flush=True)\n"
+            "print(\"ERROR! Failed to install app '2394010' (Access Denied)\", flush=True)\n"
+            "time.sleep(120)\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / "fake_steamcmd.py"
+            fake.write_text(script, encoding="utf-8")
+            with patch.object(panel_update, "steam_update_command", return_value=[sys.executable, str(fake)]), patch.object(
+                panel_update, "log"
+            ):
+                started = time.monotonic()
+                output, _code, timed_out = panel_update._run_steamcmd_once(timeout=2)
+                elapsed = time.monotonic() - started
+        self.assertTrue(timed_out)
+        self.assertIn("Access Denied", output)
+        self.assertLess(elapsed, 60, "watchdog did not interrupt the hung child")
 
     def test_fix_ownership_reports_chown_failure(self):
         with tempfile.TemporaryDirectory() as directory:

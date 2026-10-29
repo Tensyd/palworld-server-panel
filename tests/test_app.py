@@ -283,6 +283,33 @@ class ConfigAndStatusTests(unittest.TestCase):
             events = list(app.get_server_log_stream(max_seconds=2))
         self.assertEqual(events.count("data: same\n\n"), 2)
 
+    def test_stale_running_update_is_reclaimed(self):
+        stale = {
+            "running": True,
+            "started_at": "2026-01-01T00:00:00+0000",
+            "steps": [{"name": "detect", "status": "done"}],
+        }
+        with patch.object(app, "write_json") as write_json:
+            result = app.reconcile_systemd_update_status(stale, service_active=False)
+        self.assertFalse(result["running"])
+        self.assertEqual(result["phase"], "failed")
+        self.assertIn("后台更新进程已退出", result["message"])
+        write_json.assert_called_once()
+
+    def test_running_update_with_a_live_worker_is_left_alone(self):
+        with patch.object(app, "write_json") as write_json:
+            result = app.reconcile_systemd_update_status(
+                {"running": True, "started_at": "2026-01-01T00:00:00+0000"}, service_active=True
+            )
+        self.assertTrue(result["running"])
+        write_json.assert_not_called()
+
+    def test_just_started_update_survives_the_grace_window(self):
+        with patch.object(app, "write_json") as write_json:
+            result = app.reconcile_systemd_update_status({"running": True, "started_at": app.iso_now()}, service_active=False)
+        self.assertTrue(result["running"])
+        write_json.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

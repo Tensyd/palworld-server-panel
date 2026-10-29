@@ -571,12 +571,26 @@ def reset_stale_manifest() -> str:
 
 
 def _terminate_process(process: subprocess.Popen) -> None:
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    """Take down SteamCMD, including the shell wrapper and its children.
+
+    The old code simply abandoned the child on timeout, so a hung SteamCMD kept
+    holding the game files and every later attempt failed too. ``killpg`` needs
+    a process group (POSIX only), hence the guarded fallbacks.
+    """
+    signals = [signal.SIGTERM]
+    kill_signal = getattr(signal, "SIGKILL", None)
+    if kill_signal is not None:
+        signals.append(kill_signal)
+
+    for sig in signals:
         try:
             os.killpg(os.getpgid(process.pid), sig)
-        except OSError:
+        except (OSError, AttributeError):
             try:
-                process.send_signal(sig)
+                if sig == kill_signal:
+                    process.kill()
+                else:
+                    process.terminate()
             except Exception:  # pragma: no cover - best effort only
                 pass
         try:
@@ -691,7 +705,14 @@ def apply_update(auto: bool = False) -> None:
                 # 30-minute timer is that the panel knows an update exists even
                 # when applying it automatically is switched off.
                 message = "检测到新版本，但自动更新已关闭" if details["update_available"] else "已是最新（自动更新关闭）"
-                status.set(running=False, phase="checked", finished_at=iso_now(), success=True, message=message)
+                status.set(
+                    running=False,
+                    phase="checked",
+                    finished_at=iso_now(),
+                    success=True,
+                    update_available=bool(details["update_available"]),
+                    message=message,
+                )
                 log(f"Auto update disabled; {message}")
                 return
             if not details["update_available"]:
