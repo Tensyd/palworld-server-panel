@@ -308,13 +308,35 @@ def fetch_latest_manifest() -> str:
     )
 
 
+def server_looks_installed() -> bool:
+    """True when game files are on disk, even if the manifest is unusable.
+
+    Needed because ``reset_stale_manifest`` deliberately renames the .acf away.
+    If the following download is interrupted, the next check sees no local
+    manifest -- which used to read as "nothing to do" and parked the server on
+    an old build forever.
+    """
+    candidates = (
+        PALWORLD_DIR / "PalServer.sh",
+        PALWORLD_DIR / "Pal" / "Binaries" / "Linux" / "PalServer-Linux-Shipping",
+        APP_MANIFEST,
+    )
+    return any(path.exists() for path in candidates)
+
+
 def check_update() -> dict[str, Any]:
     status.step("detect", "active", "Checking local and latest manifests")
     local = parse_local_manifest()
     latest_manifest = fetch_latest_manifest()
     local_manifest = local.get("manifest", "")
-    update_available = bool(latest_manifest and local_manifest and latest_manifest != local_manifest)
-    if not local_manifest:
+    # A missing manifest on an installed server is damage, not "up to date".
+    repair_required = not local_manifest and server_looks_installed()
+    update_available = bool(latest_manifest) and (
+        (bool(local_manifest) and latest_manifest != local_manifest) or repair_required
+    )
+    if repair_required:
+        message = "本地 manifest 缺失或损坏，需要重新校验安装"
+    elif not local_manifest:
         message = "无法读取本地 appmanifest，服务端可能尚未安装"
     else:
         message = "Update available" if update_available else "Already up to date"
@@ -335,6 +357,7 @@ def check_update() -> dict[str, Any]:
         "local_manifest": local_manifest,
         "latest_manifest": latest_manifest,
         "update_available": update_available,
+        "repair_required": repair_required,
     }
 
 

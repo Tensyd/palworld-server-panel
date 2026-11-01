@@ -262,6 +262,32 @@ class PanelUpdateTests(unittest.TestCase):
         self.assertLess(elapsed, 30, "watchdog blocked on a SIGTERM-ignoring grandchild")
         self.assertEqual(leftovers, "", "grandchild survived the SIGKILL escalation")
 
+    def test_missing_manifest_on_an_installed_server_asks_for_repair(self):
+        """A wiped appmanifest must not read as "already up to date"."""
+        with tempfile.TemporaryDirectory() as directory:
+            world = Path(directory)
+            (world / "PalServer.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            with patch.object(panel_update, "PALWORLD_DIR", world), patch.object(
+                panel_update, "APP_MANIFEST", world / "steamapps" / "appmanifest_2394010.acf"
+            ), patch.object(panel_update, "fetch_latest_manifest", return_value="target"), patch.object(
+                panel_update.status, "set"
+            ), patch.object(panel_update.status, "step"):
+                details = panel_update.check_update()
+        self.assertTrue(details["repair_required"])
+        self.assertTrue(details["update_available"], "repair must schedule a SteamCMD run")
+
+    def test_missing_manifest_without_an_install_is_not_an_update(self):
+        with tempfile.TemporaryDirectory() as directory:
+            world = Path(directory)
+            with patch.object(panel_update, "PALWORLD_DIR", world), patch.object(
+                panel_update, "APP_MANIFEST", world / "steamapps" / "appmanifest_2394010.acf"
+            ), patch.object(panel_update, "fetch_latest_manifest", return_value="target"), patch.object(
+                panel_update.status, "set"
+            ), patch.object(panel_update.status, "step"):
+                details = panel_update.check_update()
+        self.assertFalse(details["repair_required"])
+        self.assertFalse(details["update_available"])
+
     def test_fix_ownership_reports_chown_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)

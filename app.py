@@ -324,6 +324,17 @@ def systemctl_query(*args: str, timeout: int = 15) -> tuple[str, str, int]:
     return run_command([SYSTEMCTL, *args], timeout=timeout, sudo=True)
 
 
+# `systemctl is-active` also reports transitional states. A Type=oneshot unit
+# spends the whole of its ExecStart in "activating", so testing for "active"
+# alone made the reconciler treat a healthy 90-second update as a dead process
+# and overwrite its status with "failed".
+SERVICE_BUSY_STATES = frozenset({"active", "activating", "reloading", "deactivating"})
+
+
+def service_state_is_busy(state: str) -> bool:
+    return (state or "").strip() in SERVICE_BUSY_STATES
+
+
 def journalctl(*args: str, timeout: int = 30) -> tuple[str, str, int]:
     return run_command([JOURNALCTL, *args], timeout=timeout, sudo=True)
 
@@ -937,8 +948,8 @@ def read_update_status() -> dict[str, Any]:
     active, _, _ = systemctl_query("is-active", UPDATE_SERVICE, timeout=10)
     auto_active, _, _ = systemctl_query("is-active", UPDATE_AUTO_SERVICE, timeout=10)
     timer_active, _, _ = systemctl_query("is-active", UPDATE_TIMER, timeout=10)
-    auto_service_active = auto_active.strip() == "active"
-    service_active = active.strip() == "active" or auto_service_active
+    auto_service_active = service_state_is_busy(auto_active)
+    service_active = service_state_is_busy(active) or auto_service_active
     status = reconcile_systemd_update_status(status, service_active)
     status.update(
         {
@@ -1151,7 +1162,7 @@ def start_update_service() -> tuple[bool, str]:
 
     active, _, _ = systemctl_query("is-active", UPDATE_SERVICE, timeout=10)
     auto_active, _, _ = systemctl_query("is-active", UPDATE_AUTO_SERVICE, timeout=10)
-    if active.strip() == "active" or auto_active.strip() == "active":
+    if service_state_is_busy(active) or service_state_is_busy(auto_active):
         return False, "更新任务正在运行"
     update_status = read_update_status()
     if update_status.get("running"):
@@ -1216,7 +1227,7 @@ def read_install_status() -> dict[str, Any]:
     active, _, _ = systemctl_query("is-active", INSTALL_SERVICE, timeout=10)
     status.update(
         {
-            "service_active": active.strip() == "active",
+            "service_active": service_state_is_busy(active),
             "log_tail": tail_text(INSTALL_LOG, 100),
         }
     )
@@ -1239,7 +1250,7 @@ def start_install_service(action: str) -> tuple[bool, str]:
     if action not in {"install-palworld", "repair"}:
         return False, "unsupported installer action"
     active, _, _ = systemctl_query("is-active", INSTALL_SERVICE, timeout=10)
-    if active.strip() == "active":
+    if service_state_is_busy(active):
         return False, "安装任务正在运行"
     write_json(INSTALL_REQUEST, {"action": action, "requested_at": iso_now()})
     _, err, code = systemctl("start", INSTALL_SERVICE, timeout=20)
@@ -2296,6 +2307,33 @@ def wait_for_service_state(active: bool, timeout: int = 80) -> bool:
     return False
 
 
+def game_is_stopped() -> bool:
+    """True only when nothing is still using the game files.
+
+    ``running`` in get_server_status() means "ready to serve": for Docker that
+    is the RCON handshake, for systemd the literal ``active`` state. A container
+    that is up but not ready, or a unit in ``activating``, used to read as
+    "stopped" -- so switching saves deleted a world that was still open.
+    An unanswerable query is treated as "not stopped".
+    """
+    if using_docker_backend():
+        try:
+            return not docker_container_running()
+        except Exception:
+            return False
+    state, _, _ = systemctl_query("is-active", PALWORLD_SERVICE, timeout=10)
+    return state.strip() in {"inactive", "failed"}
+
+
+def wait_for_game_stopped(timeout: int = 90) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if game_is_stopped():
+            return True
+        time.sleep(2)
+    return False
+
+
 def fix_save_ownership() -> None:
     if using_docker_backend():
         return
@@ -2322,12 +2360,14 @@ def switch_save_slot(slot_id: str) -> dict[str, Any]:
         steps.append({"step": name, "success": success, "message": message})
 
     original_game_user = GAME_USER_SETTINGS.read_text(encoding="utf-8", errors="replace") if GAME_USER_SETTINGS.exists() else None
-    was_running = get_server_status()["running"]
+    was_running = not game_is_stopped()
     if was_running:
         success, message = _service_action_unlocked("stop")
         step("stop", success, message)
-        if not success or not wait_for_service_state(False):
+        if not success:
             raise RuntimeError("停止服务器失败，已取消切换")
+        if not wait_for_game_stopped(90):
+            raise RuntimeError("服务器未能在限定时间内停止，已取消切换")
     else:
         step("stop", True, "server already stopped")
 
@@ -2344,10 +2384,13 @@ def switch_save_slot(slot_id: str) -> dict[str, Any]:
 
     def rollback_after_failure(reason: Exception) -> None:
         try:
-            current_status = get_server_status()
-            if current_status.get("container_running"):
+            # Previously keyed off status["container_running"], which systemd
+            # never sets, so a failed start left the server running while the
+            # rollback deleted and restored its save.
+            if not game_is_stopped():
                 _service_action_unlocked("stop")
-                wait_for_service_state(False, timeout=60)
+                if not wait_for_game_stopped(60):
+                    raise RuntimeError("回滚前无法确认服务器已停止")
             remove_children(ACTIVE_SAVEGAMES_DIR)
             if backup:
                 copytree_clean(SAVE_BACKUP_DIR / backup["id"] / "SaveGames" / "0", ACTIVE_SAVEGAMES_DIR)

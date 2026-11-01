@@ -163,7 +163,9 @@ class ConfigAndStatusTests(unittest.TestCase):
                 app, "find_world_dirs", return_value=[]
             ), patch.object(app, "GAME_USER_SETTINGS", game_user), patch.object(
                 app, "get_server_status", return_value={"running": False, "container_running": False}
-            ), patch.object(app, "backup_current_save", side_effect=ValueError("当前存档目录为空，无法备份")), patch.object(
+            ), patch.object(app, "game_is_stopped", return_value=True), patch.object(
+                app, "backup_current_save", side_effect=ValueError("当前存档目录为空，无法备份")
+            ), patch.object(
                 app, "remove_children"
             ), patch.object(app, "write_dedicated_server_name"), patch.object(app, "fix_save_ownership"), patch.object(
                 app, "write_json"
@@ -332,6 +334,51 @@ class ConfigAndStatusTests(unittest.TestCase):
             result = app.reconcile_systemd_update_status({"running": True, "started_at": app.iso_now()}, service_active=False)
         self.assertTrue(result["running"])
         write_json.assert_not_called()
+
+    def test_transitional_service_states_count_as_busy(self):
+        for state in ("active", "activating", "reloading", "deactivating"):
+            self.assertTrue(app.service_state_is_busy(state), state)
+        for state in ("inactive", "failed", "unknown", "", "  "):
+            self.assertFalse(app.service_state_is_busy(state), state)
+
+    def test_activating_update_is_not_reclaimed_as_failed(self):
+        """A oneshot spends its whole run in 'activating'; that is not death."""
+        stale = {"running": True, "started_at": "2026-01-01T00:00:00+0000", "steps": []}
+        with patch.object(app, "read_json", return_value=stale), patch.object(
+            app, "systemctl_query", side_effect=[("activating", "", 0), ("inactive", "", 3), ("inactive", "", 3)]
+        ), patch.object(app, "write_json") as write_json, patch.object(app, "tail_text", return_value=[]), patch.object(
+            app, "using_docker_backend", return_value=False
+        ):
+            result = app.read_update_status()
+        self.assertTrue(result["running"])
+        self.assertTrue(result["service_active"])
+        write_json.assert_not_called()
+
+    def test_game_is_stopped_rejects_transitional_and_unknown_states(self):
+        """Only inactive/failed mean "safe to touch the save files"."""
+        with patch.object(app, "using_docker_backend", return_value=False):
+            for state, expected in (
+                ("inactive", True),
+                ("failed", True),
+                ("active", False),
+                ("activating", False),
+                ("deactivating", False),
+                ("unknown", False),
+                ("", False),
+            ):
+                with patch.object(app, "systemctl_query", return_value=(state, "", 0)):
+                    self.assertIs(app.game_is_stopped(), expected, f"state={state!r}")
+
+    def test_game_is_stopped_uses_container_state_on_docker(self):
+        """Docker readiness (RCON) is not the same thing as "not running"."""
+        with patch.object(app, "using_docker_backend", return_value=True), patch.object(
+            app, "docker_container_running", return_value=True
+        ):
+            self.assertFalse(app.game_is_stopped())
+        with patch.object(app, "using_docker_backend", return_value=True), patch.object(
+            app, "docker_container_running", return_value=False
+        ):
+            self.assertTrue(app.game_is_stopped())
 
     def test_parse_iso_timestamp_accepts_strftime_offsets(self):
         # iso_now() emits "+0800"; Python 3.10's fromisoformat rejects that form
