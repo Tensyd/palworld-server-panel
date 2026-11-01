@@ -165,5 +165,34 @@ class RconCommandTests(unittest.TestCase):
         self.assertEqual(response, "[RCON Error] invalid response packet size")
 
 
+class RconDeadlineTests(unittest.TestCase):
+    def test_a_slow_drip_response_cannot_outlive_the_deadline(self):
+        """A server that dribbles bytes must not extend the command budget.
+
+        recv_exact() used to inherit whatever socket timeout the caller set
+        once, so each chunk restarted the clock: a 40-byte answer sent one byte
+        per 0.2s with timeout=1 returned after ~9s instead of failing at 1s.
+        """
+
+        def handler(connection):
+            self.assertEqual(read_packet(connection), (1, 3, "secret"))
+            send_packet(connection, 1, 2)
+            self.assertEqual(read_packet(connection), (2, 2, "Info"))
+            payload = struct.pack("<ii", 0, 0) + b"x" * 40 + b"\x00\x00"
+            connection.sendall(struct.pack("<i", len(payload)))
+            for byte in payload:
+                time.sleep(0.2)
+                connection.sendall(bytes([byte]))
+
+        server = RconServer(handler)
+        started = time.monotonic()
+        result = execute_rcon_command("127.0.0.1", server.port, "secret", "Info", timeout=1.0)
+        elapsed = time.monotonic() - started
+
+        self.assertFalse(result.success)
+        self.assertIn("timed out", result.message)
+        self.assertLess(elapsed, 4.0, "every chunk reset the socket timeout")
+
+
 if __name__ == "__main__":
     unittest.main()

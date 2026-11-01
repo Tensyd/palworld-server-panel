@@ -405,5 +405,55 @@ class ConfigAndStatusTests(unittest.TestCase):
         self.assertEqual(app.parse_iso_timestamp("not a timestamp"), 0.0)
 
 
+class LogTailTests(unittest.TestCase):
+    def test_small_log_matches_a_full_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "small.log"
+            path.write_text("\n".join(f"line{i}" for i in range(200)) + "\n", encoding="utf-8")
+            self.assertEqual(app.tail_text(path, 5), [f"line{i}" for i in range(195, 200)])
+
+    def test_large_log_is_read_as_a_bounded_window(self):
+        # tail_text() used to read the whole file; update.log grows for the life
+        # of the panel and the status endpoint polls it continuously.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "big.log"
+            with path.open("w", encoding="utf-8") as handle:
+                for index in range(40000):
+                    handle.write(f"row {index:06d} " + "x" * 40 + "\n")
+            expected = path.read_text(encoding="utf-8").splitlines()[-10:]
+            result = app.tail_text(path, 10)
+            self.assertEqual(result, expected)
+            self.assertTrue(result[0].startswith("row "), "the window started mid-line")
+
+    def test_missing_log_is_empty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(app.tail_text(Path(directory) / "absent.log", 10), [])
+
+
+class ModToggleTests(unittest.TestCase):
+    def test_disabling_a_mod_leaves_similarly_named_mods_alone(self):
+        # The fallback used to glob "<mod_id>*", so turning off "coolmod" also
+        # moved "coolmod_extra.pak" out of the game directory.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pak_dir = root / "mods"
+            disabled_dir = root / "disabled"
+            pak_dir.mkdir()
+            disabled_dir.mkdir()
+            (pak_dir / "CoolMod.pak").write_text("a", encoding="utf-8")
+            (pak_dir / "coolmod_extra.pak").write_text("b", encoding="utf-8")
+
+            with patch.object(app, "MOD_PAK_DIR", pak_dir), patch.object(
+                app, "MOD_LIBRARY_ROOT", root
+            ), patch.object(app, "ensure_mod_dirs"), patch.object(app, "write_mod_meta"), patch.object(
+                app, "read_mod_meta", return_value={"id": "coolmod", "name": "CoolMod"}
+            ):
+                meta = app.set_mod_enabled("coolmod", False)
+
+            self.assertEqual([item["name"] for item in meta["files"]], ["CoolMod.pak"])
+            self.assertEqual(sorted(path.name for path in disabled_dir.iterdir()), ["CoolMod.pak"])
+            self.assertEqual(sorted(path.name for path in pak_dir.iterdir()), ["coolmod_extra.pak"])
+
+
 if __name__ == "__main__":
     unittest.main()

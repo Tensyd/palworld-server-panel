@@ -20,6 +20,14 @@ class RconConnectionClosed(RuntimeError):
     """Raised when the server closes a completed RCON response."""
 
 
+class RconDeadlineExceeded(RuntimeError):
+    """Raised when a response body cannot be read before the shared deadline.
+
+    Kept distinct from socket.timeout on purpose: the read loop treats a socket
+    timeout as "response finished, go idle", and a stalled transfer is not that.
+    """
+
+
 @dataclass(frozen=True)
 class RconResult:
     """The result of a single Source RCON command."""
@@ -60,7 +68,24 @@ def execute_rcon_command(
             def recv_exact(length: int) -> bytes:
                 data = bytearray()
                 while len(data) < length:
-                    chunk = sock.recv(length - len(data))
+                    # Recompute the budget for every chunk. Setting the socket
+                    # timeout once let a server that dribbles one byte just
+                    # under the timeout keep the connection alive indefinitely,
+                    # so `timeout` bounded each recv() instead of the command.
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise RconDeadlineExceeded("response timed out")
+                    sock.settimeout(remaining)
+                    try:
+                        chunk = sock.recv(length - len(data))
+                    except socket.timeout as exc:
+                        # Nothing at all yet means the server simply went idle --
+                        # keep the historical "no acknowledgement" handling.
+                        # Half a packet is a stalled transfer, and saying "the
+                        # command was not acknowledged" would hide that.
+                        if not data:
+                            raise
+                        raise RconDeadlineExceeded("response timed out") from exc
                     if not chunk:
                         raise RconConnectionClosed("connection closed while reading response")
                     data.extend(chunk)

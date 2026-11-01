@@ -41,6 +41,11 @@ SAVE_UPLOAD_MAX_BYTES = int(os.environ.get("SAVE_UPLOAD_MAX_BYTES", str(1024 * 1
 app.config["MAX_CONTENT_LENGTH"] = SAVE_UPLOAD_MAX_BYTES
 
 PALWORLD_DIR = Path(os.environ.get("PALWORLD_DIR", "/home/demo/palworld"))
+# Every panel-owned path hangs off PANEL_DIR, matching panel_update.py and
+# panel_install.py. These used to be spelled out one by one, which meant a
+# custom PANEL_DIR moved the updater's state file but not the one the web UI
+# reads -- the panel then waited forever on a status file nobody wrote.
+PANEL_DIR = Path(os.environ.get("PANEL_DIR", "/home/demo/palworld-panel"))
 PALWORLD_CONFIG = Path(
     os.environ.get(
         "PALWORLD_CONFIG",
@@ -73,20 +78,20 @@ _player_response_lock = threading.Lock()
 SYSTEMCTL = os.environ.get("SYSTEMCTL", "/usr/bin/systemctl")
 JOURNALCTL = os.environ.get("JOURNALCTL", "/usr/bin/journalctl")
 APP_VERSION = os.environ.get("PANEL_ASSET_VERSION", str(int(time.time())))
-CONFIG_BACKUP_DIR = Path(os.environ.get("CONFIG_BACKUP_DIR", "/home/demo/palworld-panel/config-backups"))
-AUDIT_LOG = Path(os.environ.get("AUDIT_LOG", "/home/demo/palworld-panel/audit.log"))
+CONFIG_BACKUP_DIR = Path(os.environ.get("CONFIG_BACKUP_DIR", str(PANEL_DIR / "config-backups")))
+AUDIT_LOG = Path(os.environ.get("AUDIT_LOG", str(PANEL_DIR / "audit.log")))
 SAVE_ROOT = PALWORLD_DIR / "Pal" / "Saved"
 ACTIVE_SAVEGAMES_DIR = SAVE_ROOT / "SaveGames" / "0"
 CONFIG_DIR = SAVE_ROOT / "Config" / "LinuxServer"
 GAME_USER_SETTINGS = CONFIG_DIR / "GameUserSettings.ini"
-SAVE_SLOT_ROOT = Path(os.environ.get("SAVE_SLOT_ROOT", "/home/demo/palworld-panel/save-slots"))
+SAVE_SLOT_ROOT = Path(os.environ.get("SAVE_SLOT_ROOT", str(PANEL_DIR / "save-slots")))
 SAVE_SLOT_DIR = SAVE_SLOT_ROOT / "slots"
 SAVE_BACKUP_DIR = SAVE_SLOT_ROOT / "backups"
 SAVE_IMPORT_DIR = SAVE_SLOT_ROOT / "imports"
 SAVE_LOCK_PATH = SAVE_SLOT_ROOT / ".operation.lock"
 ACTIVE_SLOT_PATH = SAVE_SLOT_ROOT / "active-slot.json"
 CHOWN = os.environ.get("CHOWN", "/usr/bin/chown")
-MOD_LIBRARY_ROOT = Path(os.environ.get("MOD_LIBRARY_ROOT", "/home/demo/palworld-panel/mod-library"))
+MOD_LIBRARY_ROOT = Path(os.environ.get("MOD_LIBRARY_ROOT", str(PANEL_DIR / "mod-library")))
 MOD_UPLOAD_MAX_BYTES = int(os.environ.get("MOD_UPLOAD_MAX_BYTES", str(1024 * 1024 * 1024)))
 PALWORLD_MOD_MODE = os.environ.get("PALWORLD_MOD_MODE", "pak-safe")
 MOD_PAK_DIR = PALWORLD_DIR / "Pal" / "Content" / "Paks" / "~mods"
@@ -94,9 +99,9 @@ PAL_MODS_DIR = PALWORLD_DIR / "Pal" / "Content" / "Paks" / "Mods"
 OFFICIAL_MOD_WORKSHOP_DIR = PAL_MODS_DIR / "Workshop"
 PAL_MOD_SETTINGS = PAL_MODS_DIR / "PalModSettings.ini"
 app.config["MAX_CONTENT_LENGTH"] = max(app.config["MAX_CONTENT_LENGTH"], MOD_UPLOAD_MAX_BYTES)
-UPDATE_SCRIPT = Path(os.environ.get("PANEL_UPDATE_SCRIPT", "/home/demo/palworld-panel/panel_update.py"))
-UPDATE_STATUS = Path(os.environ.get("PANEL_UPDATE_STATUS", "/home/demo/palworld-panel/update-status.json"))
-UPDATE_LOG = Path(os.environ.get("PANEL_UPDATE_LOG", "/home/demo/palworld-panel/update.log"))
+UPDATE_SCRIPT = Path(os.environ.get("PANEL_UPDATE_SCRIPT", str(PANEL_DIR / "panel_update.py")))
+UPDATE_STATUS = Path(os.environ.get("PANEL_UPDATE_STATUS", str(PANEL_DIR / "update-status.json")))
+UPDATE_LOG = Path(os.environ.get("PANEL_UPDATE_LOG", str(PANEL_DIR / "update.log")))
 PALWORLD_UPDATE_REQUEST = Path(os.environ.get("PALWORLD_UPDATE_REQUEST_FILE", str(PALWORLD_DIR / ".panel-update-request")))
 DOCKER_STEAMCMD_LOG = Path(os.environ.get("STEAMCMD_UPDATE_LOG", str(PALWORLD_DIR / ".panel-steamcmd-update.log")))
 UPDATE_SERVICE = os.environ.get("PANEL_UPDATE_SERVICE", "palworld-panel-update.service")
@@ -104,10 +109,10 @@ UPDATE_AUTO_SERVICE = os.environ.get("PANEL_AUTO_UPDATE_SERVICE", "palworld-pane
 UPDATE_TIMER = os.environ.get("PANEL_UPDATE_TIMER", "palworld-panel-update.timer")
 # 状态文件说"在跑"但后台进程已经不在时，多久之后回收成失败状态。
 UPDATE_STALE_GRACE_SECONDS = int(os.environ.get("PANEL_UPDATE_STALE_GRACE_SECONDS", "90"))
-INSTALL_SCRIPT = Path(os.environ.get("PANEL_INSTALL_SCRIPT", "/home/demo/palworld-panel/panel_install.py"))
-INSTALL_STATUS = Path(os.environ.get("PANEL_INSTALL_STATUS", "/home/demo/palworld-panel/install-status.json"))
-INSTALL_LOG = Path(os.environ.get("PANEL_INSTALL_LOG", "/home/demo/palworld-panel/install.log"))
-INSTALL_REQUEST = Path(os.environ.get("PANEL_INSTALL_REQUEST", "/home/demo/palworld-panel/install-request.json"))
+INSTALL_SCRIPT = Path(os.environ.get("PANEL_INSTALL_SCRIPT", str(PANEL_DIR / "panel_install.py")))
+INSTALL_STATUS = Path(os.environ.get("PANEL_INSTALL_STATUS", str(PANEL_DIR / "install-status.json")))
+INSTALL_LOG = Path(os.environ.get("PANEL_INSTALL_LOG", str(PANEL_DIR / "install.log")))
+INSTALL_REQUEST = Path(os.environ.get("PANEL_INSTALL_REQUEST", str(PANEL_DIR / "install-request.json")))
 INSTALL_SERVICE = os.environ.get("PANEL_INSTALL_SERVICE", "palworld-panel-install.service")
 VALID_SLOT_ID = re.compile(r"^[a-z0-9_-]{1,64}$")
 VALID_WORLD_ID = re.compile(r"^[A-Fa-f0-9]{32}$")
@@ -775,13 +780,28 @@ def read_audit_events(limit: int = 80) -> list[dict[str, Any]]:
     return list(reversed(records))
 
 
-def tail_text(path: Path, lines: int = 80) -> list[str]:
+def tail_text(path: Path, lines: int = 80, max_bytes: int = 256 * 1024) -> list[str]:
+    """Return the last lines of a log without reading all of it.
+
+    Every status poll asks for the tail of update.log, which grows for the
+    whole life of the panel and can hold hours of SteamCMD output. Reading the
+    file to return 80 lines makes a 2 Hz dashboard poll scale with log size.
+    """
     if not path.exists():
         return []
     try:
-        return path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
-    except Exception:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            window = min(size, max_bytes)
+            handle.seek(size - window)
+            chunk = handle.read(window)
+    except OSError:
         return []
+    rows = chunk.decode("utf-8", errors="replace").splitlines()
+    if window < size and rows:
+        rows = rows[1:]  # the first line in the window is probably truncated
+    return rows[-lines:]
 
 
 def parse_steam_manifest(manifest_path: Path | None = None) -> dict[str, str]:
@@ -1986,11 +2006,19 @@ def set_mod_enabled(mod_id: str, enabled: bool, allow_official: bool = False) ->
         shutil.move(str(path), str(target))
         moved.append(mod_file_info(target))
     if not moved:
-        for path in source_root.glob(f"{mod_id}*"):
-            if path.is_file() and path.suffix.lower() in {".pak", ".sig"}:
-                target = target_root / path.name
-                shutil.move(str(path), str(target))
-                moved.append(mod_file_info(target))
+        # Files whose on-disk name differs only in case from the normalised id.
+        # Match the stem exactly: a "{mod_id}*" glob also sweeps up unrelated
+        # packs such as "<mod_id>_extra.pak" and moves them out of the game.
+        for path in source_root.glob("*"):
+            if not path.is_file() or path.suffix.lower() not in {".pak", ".sig"}:
+                continue
+            if normalize_mod_id(path.stem) != mod_id:
+                continue
+            target = target_root / path.name
+            if target.exists():
+                raise ValueError(f"目标文件已存在：{target.name}")
+            shutil.move(str(path), str(target))
+            moved.append(mod_file_info(target))
     if not moved:
         raise ValueError("未找到可切换的 MOD 文件")
     meta.update({"id": mod_id, "type": "pak", "enabled": enabled, "files": moved, "needs_restart": True})

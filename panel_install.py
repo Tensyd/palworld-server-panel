@@ -26,6 +26,12 @@ PANEL_USER = os.environ.get("PANEL_USER", "demo")
 PANEL_HOME = Path(os.environ.get("PANEL_HOME", f"/home/{PANEL_USER}"))
 PANEL_DIR = Path(os.environ.get("PANEL_DIR", str(PANEL_HOME / "palworld-panel")))
 VENV_DIR = PANEL_DIR / ".venv"
+# Root executes the installer out of this directory. It must not live inside
+# PANEL_DIR: that tree belongs to the panel account (it writes state files
+# there), and the sudoers rule lets that same account start the installer unit.
+# Executing a file the panel user can rewrite is a direct path from "compromised
+# panel" to root, so the root copy is kept in a root-owned directory instead.
+ROOT_EXEC_DIR = Path(os.environ.get("PANEL_ROOT_EXEC_DIR", "/usr/local/lib/palworld-panel"))
 PALWORLD_DIR = Path(os.environ.get("PALWORLD_DIR", str(PANEL_HOME / "palworld")))
 STEAMCMD_DIR = Path(os.environ.get("STEAMCMD_DIR", str(PANEL_HOME / "steamcmd")))
 STEAMCMD = Path(os.environ.get("STEAMCMD", str(STEAMCMD_DIR / "steamcmd.sh")))
@@ -458,7 +464,7 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory={PANEL_DIR}
 EnvironmentFile={ENV_FILE}
-ExecStart=/usr/bin/python3 {PANEL_DIR}/panel_install.py --service
+ExecStart=/usr/bin/python3 {ROOT_EXEC_DIR}/panel_install.py --service
 TimeoutStartSec=7200
 """
     # The updater never had a retry budget of its own before, so 90 minutes was
@@ -557,6 +563,23 @@ def write_service_files() -> None:
     status.step("systemd", "done", "Systemd units installed")
 
 
+def install_privileged_copy() -> None:
+    """Put a root-owned copy of this installer where the unit expects it.
+
+    The panel account owns PANEL_DIR, and sudoers lets it start
+    palworld-panel-install.service, which runs as root. Running
+    {PANEL_DIR}/panel_install.py there meant the panel user could edit the file
+    and have root execute it. The unit now points at the copy installed here,
+    outside any directory the panel can write to.
+    """
+    status.step("systemd", "active", "Installing root-owned installer copy")
+    run_checked(["install", "-d", "-o", "root", "-g", "root", "-m", "755", str(ROOT_EXEC_DIR)], timeout=30)
+    run_checked(
+        ["install", "-o", "root", "-g", "root", "-m", "755", str(Path(__file__).resolve()), str(ROOT_EXEC_DIR / "panel_install.py")],
+        timeout=30,
+    )
+
+
 def install_panel_files() -> None:
     status.step("panel", "active", "Preparing panel directory")
     PANEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -571,6 +594,7 @@ def repair() -> None:
         ensure_user()
         install_panel_files()
         install_python_deps()
+        install_privileged_copy()
         configure_palworld()
         write_service_files()
         check_environment()
@@ -593,6 +617,7 @@ def install_palworld() -> None:
             install_steamcmd()
             install_panel_files()
             install_palworld_server()
+            install_privileged_copy()
             configure_palworld()
             write_service_files()
             check_environment()

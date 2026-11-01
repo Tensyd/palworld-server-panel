@@ -7,5 +7,7 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=/home/demo/palworld-panel
 EnvironmentFile=/etc/palworld-panel.env
-ExecStart=/usr/bin/python3 /home/demo/palworld-panel/panel_install.py --service
+# Runs as root and is startable by the panel account through sudoers, so it
+# executes the root-owned copy rather than the one in the panel's own tree.
+ExecStart=/usr/bin/python3 /usr/local/lib/palworld-panel/panel_install.py --service
 TimeoutStartSec=7200

@@ -37,6 +37,10 @@ const state = {
     logAutoScroll: true,
     progressStartedAt: 0,
     progressLastError: "",
+    // Identifies the progress dialog that is currently on screen. Long-running
+    // pollers capture it and stop writing as soon as it changes, so a stale
+    // updater loop cannot paint into a dialog the user opened later.
+    progressToken: 0,
     activeAbortController: null,
     saveUploadMaxBytes: 1024 * 1024 * 1024,
     modUploadMaxBytes: 1024 * 1024 * 1024,
@@ -209,7 +213,7 @@ const configGroups = [
         fields: [
             ["DropItemMaxNum", "掉落物上限", "number", { step: "100", min: 0, max: 10000, hint: "过高会增加服务器性能压力。" }],
             ["DropItemMaxNum_UNKO", "特殊掉落物上限", "number", { step: "10", min: 0, max: 10000 }],
-            ["DropItemAliveMaxHours", "掉落物保留时间(时)", "number", { step: "0.5", min: 0.1, max: 240 }],
+            ["DropItemAliveMaxHours", "掉落物保留时间(时)", "number", { step: "0.1", min: 0.1, max: 240 }],
             ["SupplyDropSpan", "陨石与补给空投间隔(分)", "number", { step: "1", min: 1, max: 1440 }],
             ["bAutoResetGuildNoOnlinePlayers", "自动清理长期无人公会据点", "bool", { hint: "达到离线时限后，删除该公会的建筑和据点帕鲁。" }],
             ["AutoResetGuildTimeNoOnlinePlayers", "无人公会据点清理时限(时)", "number", { step: "1", min: 0, max: 720 }],
@@ -396,6 +400,11 @@ function showToast(message, type = "info") {
 function closeDialog(result = null) {
     const modal = $("#interactionModal");
     if (!modal) return;
+    // Leaving a progress dialog invalidates whoever was driving it. Without
+    // this, a poller would keep calling setProgressStep()/finishProgressDialog()
+    // and those write into #dialogBody -- which by then may be a completely
+    // different dialog.
+    if (modal.classList.contains("is-progress")) state.progressToken += 1;
     modal.classList.remove("is-open", "is-danger", "is-progress");
     modal.setAttribute("aria-hidden", "true");
     $("#dialogBody").replaceChildren();
@@ -445,6 +454,7 @@ function openDialog(options = {}) {
     modal.classList.toggle("is-progress", Boolean(options.progress));
 
     if (options.progress) {
+        state.progressToken += 1;
         state.progressStartedAt = Date.now();
         state.progressLastError = "";
         const list = document.createElement("div");
@@ -937,7 +947,13 @@ async function api(path, options = {}) {
         const response = await fetch(path, fetchOptions);
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-            throw new Error(data.message || `请求失败 (${response.status})`);
+            const error = new Error(data.message || `请求失败 (${response.status})`);
+            // Keep the body: panels send structured detail (status, steps,
+            // install checks) alongside the failure message, and throwing a
+            // bare Error used to drop all of it on the floor.
+            error.status = response.status;
+            error.payload = data;
+            throw error;
         }
         return data;
     } catch (error) {
@@ -1120,9 +1136,13 @@ function drawTrendChart(canvas, values, color, maxValue = 100) {
     if (!canvas || !canvas.getContext) return;
     const ctx = canvas.getContext("2d");
     const rect = canvas.getBoundingClientRect();
-    const width = Math.max(160, Math.round(rect.width || canvas.width || 220));
-    const height = Math.max(58, Math.round(rect.height || canvas.height || 72));
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // A hidden tab reports rect.width === 0. Falling back to canvas.width
+    // there is poison: canvas.width is already multiplied by dpr, so every
+    // refresh while the tab is hidden doubled the backing store (440x144 ->
+    // 7040x2304 after four passes). Divide it back out instead.
+    const width = Math.max(160, Math.round(rect.width || canvas.width / dpr || 220));
+    const height = Math.max(58, Math.round(rect.height || canvas.height / dpr || 72));
     canvas.width = Math.round(width * dpr);
     canvas.height = Math.round(height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1631,6 +1651,7 @@ async function checkUpdateNow() {
     } catch (error) {
         setMessage($("#updateMsg"), error.message, "error");
         showToast(error.message, "error");
+        if (error.payload?.status) renderUpdateStatus(error.payload.status);
         await loadUpdateStatus(false);
     } finally {
         if (button) button.classList.remove("is-busy");
@@ -1655,12 +1676,16 @@ async function applyUpdateNow() {
     const button = $("#applyUpdateBtn");
     if (button) button.classList.add("is-busy");
     openProgressDialog("Palworld 后台更新", ["检测版本", "通知玩家", "保存世界", "停止服务", "备份存档", "SteamCMD 更新", "修复权限", "启动服务", "完成"], "更新会在 systemd 后台执行，面板会持续读取进度。");
+    const token = state.progressToken;
     try {
         const data = await api("/api/update/apply", { method: "POST" });
         renderUpdateStatus(data.status || {});
         showToast(data.message || "后台更新已启动", "success");
-        pollUpdateProgress();
+        pollUpdateProgress(token);
     } catch (error) {
+        // A failed POST can still carry the real status (the updater may have
+        // started and later failed, or the request timed out while it runs).
+        if (error.payload?.status) renderUpdateStatus(error.payload.status);
         finishProgressDialog(error.message, "error");
         setMessage($("#updateMsg"), error.message, "error");
         showToast(error.message, "error");
@@ -1669,11 +1694,14 @@ async function applyUpdateNow() {
     }
 }
 
-async function pollUpdateProgress() {
+async function pollUpdateProgress(token = state.progressToken) {
+    const mine = () => state.progressToken === token;
     const map = ["detect", "notify", "save", "stop", "backup", "update", "permissions", "start", "complete"];
     for (let attempt = 0; attempt < 240; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 3000));
+        if (!mine()) return;
         await loadUpdateStatus(false);
+        if (!mine()) return;
         const status = state.updateStatus || {};
         const steps = Array.isArray(status.steps) ? status.steps : [];
         steps.forEach((step) => {
@@ -1693,7 +1721,7 @@ async function pollUpdateProgress() {
             return;
         }
     }
-    finishProgressDialog("更新仍在后台运行，请稍后查看更新日志", "warn");
+    if (mine()) finishProgressDialog("更新仍在后台运行，请稍后查看更新日志", "warn");
 }
 
 const installStepLabels = {
@@ -1868,13 +1896,15 @@ async function startInstallAction(action) {
         ["环境检查", "运行用户", "系统依赖", "SteamCMD", "下载 Palworld", "生成配置", "安装服务", "完成"],
         isRepair ? "后台会修复服务、权限和配置，不会触碰存档内容。" : "安装过程由 systemd 后台执行，下载可能需要较久。"
     );
+    const token = state.progressToken;
     try {
         const endpoint = isRepair ? "/api/install/repair" : "/api/install/palworld";
         const data = await api(endpoint, { method: "POST" });
         renderInstallStatus(data.status || {});
         showToast(data.message || (isRepair ? "修复任务已启动" : "安装任务已启动"), "success");
-        pollInstallProgress();
+        pollInstallProgress(token);
     } catch (error) {
+        if (error.payload?.status) renderInstallStatus(error.payload.status);
         finishProgressDialog(error.message, "error");
         setMessage($("#installMsg"), error.message, "error");
         showToast(error.message, "error");
@@ -1884,11 +1914,14 @@ async function startInstallAction(action) {
     }
 }
 
-async function pollInstallProgress() {
+async function pollInstallProgress(token = state.progressToken) {
+    const mine = () => state.progressToken === token;
     const map = ["environment", "user", "dependencies", "steamcmd", "palworld", "config", "systemd", "complete"];
     for (let attempt = 0; attempt < 240; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 3000));
+        if (!mine()) return;
         await loadInstallStatus(false);
+        if (!mine()) return;
         const status = state.installStatus || {};
         const steps = Array.isArray(status.steps) ? status.steps : [];
         steps.forEach((step) => {
@@ -1909,7 +1942,7 @@ async function pollInstallProgress() {
             return;
         }
     }
-    finishProgressDialog("安装任务仍在后台运行，请稍后查看安装日志", "warn");
+    if (mine()) finishProgressDialog("安装任务仍在后台运行，请稍后查看安装日志", "warn");
 }
 
 function modTypeLabel(type) {

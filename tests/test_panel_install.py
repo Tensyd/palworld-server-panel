@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 import panel_install
 
@@ -53,6 +54,7 @@ class ServiceFileTests(unittest.TestCase):
         units = panel_install.render_service_files()
         for name in (
             "palworld-panel.service",
+            "palworld-panel-install.service",
             "palworld-panel-update.service",
             "palworld-panel-auto-update.service",
             "palworld-panel-update.timer",
@@ -60,6 +62,44 @@ class ServiceFileTests(unittest.TestCase):
             with self.subTest(unit=name):
                 on_disk = (DEPLOY_DIR / name).read_text(encoding="utf-8")
                 self.assertEqual(directives(units[name]), directives(on_disk), f"{name} drifted from panel_install.py")
+
+
+class PrivilegedBoundaryTests(unittest.TestCase):
+    """The panel account must not be able to feed code to root.
+
+    panel_install runs as root and is startable by the panel user through
+    sudoers. It used to live in PANEL_DIR, which is chowned to that same user.
+    """
+
+    def test_install_unit_runs_the_root_owned_copy(self):
+        unit = panel_install.render_service_files()["palworld-panel-install.service"]
+        normalized = unit.replace("\\", "/")
+        self.assertIn(f"{panel_install.ROOT_EXEC_DIR.as_posix()}/panel_install.py", normalized)
+        panel_exec = f"{panel_install.PANEL_DIR.as_posix()}/panel_install.py"
+        self.assertNotIn(panel_exec, normalized, "root must not execute a file the panel user can rewrite")
+
+    def test_root_exec_dir_is_outside_the_panel_tree(self):
+        root_dir = panel_install.ROOT_EXEC_DIR.resolve()
+        panel_dir = panel_install.PANEL_DIR.resolve()
+        self.assertFalse(
+            root_dir == panel_dir or panel_dir in root_dir.parents,
+            f"{root_dir} sits inside the panel user's tree {panel_dir}",
+        )
+
+    def test_privileged_copy_is_installed_root_owned(self):
+        with patch.object(panel_install, "run_checked") as run_checked, patch.object(
+            panel_install, "status"
+        ) as status:
+            panel_install.install_privileged_copy()
+        commands = [call.args[0] for call in run_checked.call_args_list]
+        self.assertTrue(any(cmd[:4] == ["install", "-d", "-o", "root"] for cmd in commands), commands)
+        copies = [cmd for cmd in commands if cmd[0] == "install" and "-d" not in cmd]
+        self.assertEqual(len(copies), 1, commands)
+        cmd = copies[0]
+        self.assertEqual(cmd[1:7], ["-o", "root", "-g", "root", "-m", "755"])
+        self.assertTrue(cmd[7].endswith("panel_install.py"))
+        self.assertEqual(cmd[8], str(panel_install.ROOT_EXEC_DIR / "panel_install.py"))
+        status.step.assert_called()
 
 
 if __name__ == "__main__":

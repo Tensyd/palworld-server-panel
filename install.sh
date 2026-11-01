@@ -62,6 +62,13 @@ fi
 chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
 chmod 755 "${PANEL_DIR}/panel_install.py" "${PANEL_DIR}/panel_update.py" 2>/dev/null || true
 
+# Root runs the installer on behalf of the panel account (sudoers allows it to
+# start palworld-panel-install.service), so the executed copy must live outside
+# the tree that account owns. Keep one root-owned copy and point the unit at it.
+ROOT_EXEC_DIR="${ROOT_EXEC_DIR:-/usr/local/lib/palworld-panel}"
+install -d -o root -g root -m 755 "${ROOT_EXEC_DIR}"
+install -o root -g root -m 755 "${PANEL_DIR}/panel_install.py" "${ROOT_EXEC_DIR}/panel_install.py"
+
 log "Preparing /etc/palworld-panel.env"
 ADMIN_PASSWORD="$(python3 - <<'PY'
 import secrets
@@ -115,7 +122,7 @@ chmod 600 /etc/palworld-panel.env
 
 log "Installing/repairing panel services"
 PANEL_USER="${PANEL_USER}" PANEL_HOME="${PANEL_HOME}" PANEL_DIR="${PANEL_DIR}" PALWORLD_DIR="${PALWORLD_DIR}" STEAMCMD_DIR="${STEAMCMD_DIR}" \
-  python3 "${PANEL_DIR}/panel_install.py" --repair
+  python3 "${ROOT_EXEC_DIR}/panel_install.py" --repair
 
 systemctl daemon-reload
 systemctl restart palworld-panel.service
@@ -123,7 +130,7 @@ systemctl restart palworld-panel.service
 if [[ "${INSTALL_PALWORLD}" == "true" ]]; then
   log "Installing Palworld Dedicated Server"
   PANEL_USER="${PANEL_USER}" PANEL_HOME="${PANEL_HOME}" PANEL_DIR="${PANEL_DIR}" PALWORLD_DIR="${PALWORLD_DIR}" STEAMCMD_DIR="${STEAMCMD_DIR}" \
-    python3 "${PANEL_DIR}/panel_install.py" --install-palworld
+    python3 "${ROOT_EXEC_DIR}/panel_install.py" --install-palworld
 fi
 
 log "Done"
