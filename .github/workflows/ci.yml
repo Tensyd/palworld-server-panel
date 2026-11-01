@@ -57,18 +57,9 @@ jobs:
           python -m pip install -r requirements.txt pytest
 
       - name: Run tests
-        # The suite must not assume /home/demo exists or is writable -- CI
-        # runners are not root. Point every writable path at a temp directory.
-        # (The runner context is only available at step level, not job level.)
+        # No path overrides: the suite must be hermetic on a bare host. Pointing
+        # the paths at runner.temp used to hide tests that wrote to /home/demo,
+        # which then failed the moment they ran anywhere else.
         env:
-          PALWORLD_DIR: ${{ runner.temp }}/panel-ci/palworld
-          CONFIG_BACKUP_DIR: ${{ runner.temp }}/panel-ci/panel/config-backups
-          AUDIT_LOG: ${{ runner.temp }}/panel-ci/panel/audit.log
-          SAVE_SLOT_ROOT: ${{ runner.temp }}/panel-ci/panel/save-slots
-          MOD_LIBRARY_ROOT: ${{ runner.temp }}/panel-ci/panel/mod-library
-          PANEL_UPDATE_STATUS: ${{ runner.temp }}/panel-ci/panel/update-status.json
-          PANEL_UPDATE_LOG: ${{ runner.temp }}/panel-ci/panel/update.log
-          PANEL_INSTALL_STATUS: ${{ runner.temp }}/panel-ci/panel/install-status.json
-          PANEL_INSTALL_LOG: ${{ runner.temp }}/panel-ci/panel/install.log
           PANEL_SECRET_KEY: ci-test-secret
         run: python -m pytest tests/ -q --tb=short
