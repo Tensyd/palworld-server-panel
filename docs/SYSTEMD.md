@@ -87,7 +87,14 @@ journalctl -u palworld.service -f
 如果 systemd unit、sudoers 或权限异常，可以使用面板“安装向导”的“修复安装”，也可以手动执行：
 
 ```bash
-sudo python3 /home/demo/palworld-panel/panel_install.py --repair
+sudo python3 /usr/local/lib/palworld-panel/panel_install.py --repair
 ```
 
 修复不会主动删除存档。
+
+安装器会把 `panel_install.py` 复制一份到 `/usr/local/lib/palworld-panel/`（`root:root 755`），
+`palworld-panel-install.service` 执行的是这份副本，而不是 `/home/demo/palworld-panel/` 里的原始文件。
+原因是面板账户拥有自己的目录，同时又有权通过 sudoers 启动安装服务：如果 root 执行的是面板账户能改写的脚本，
+拿到面板账户就等于拿到 root。手动修复时也请用上面这条路径。
+
+改了 `panel_install.py` 之后要重新执行一次 `sudo bash install.sh`（或 `--repair`），副本才会更新。
