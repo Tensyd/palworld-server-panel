@@ -128,10 +128,11 @@ STRING_FIELDS = {
 }
 UNQUOTED_STRING_FIELDS: set[str] = set()
 SAVE_UPLOAD_MAX_EXTRACTED_BYTES = int(os.environ.get("SAVE_UPLOAD_MAX_EXTRACTED_BYTES", str(2 * 1024 * 1024 * 1024)))
-# A log stream holds a request thread for its whole lifetime, and the panel
-# runs two workers x four threads. Five minutes per connection meant three open
-# log tabs could starve the control API, so the stream is shorter (clients
-# reconnect for more) and the number of concurrent streams is capped.
+# A log stream holds a request thread for its whole lifetime, and gunicorn runs
+# workers=2 x threads=4. Five minutes per connection meant three idle log tabs
+# could starve the control API. The stream is shorter now (clients reconnect for
+# more) and capped per worker process -- with 2 workers the effective ceiling is
+# 4 streams, and each worker always keeps 2 threads free for normal requests.
 LOG_STREAM_MAX_SECONDS = int(os.environ.get("LOG_STREAM_MAX_SECONDS", "60"))
 LOG_STREAM_MAX_CLIENTS = max(1, int(os.environ.get("LOG_STREAM_MAX_CLIENTS", "2")))
 _log_stream_clients = 0
