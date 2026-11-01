@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from pathlib import Path
+import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -16,6 +18,11 @@ class PanelUpdateTests(unittest.TestCase):
     def setUp(self):
         panel_update.status = panel_update.UpdateStatus()
         self.write_json = patch.object(panel_update, "write_json").start()
+        # log() writes to LOG_PATH, whose default is under /home/demo. That does
+        # not exist -- and is not writable -- on a fresh host, so without this
+        # the run_steam_update tests only pass where the default path happens to
+        # be creatable (they failed on a real Debian box until it was patched).
+        self.log = patch.object(panel_update, "log").start()
         self.addCleanup(patch.stopall)
 
     def test_check_only_uses_operation_lock(self):
@@ -222,6 +229,38 @@ class PanelUpdateTests(unittest.TestCase):
         self.assertTrue(timed_out)
         self.assertIn("Access Denied", output)
         self.assertLess(elapsed, 60, "watchdog did not interrupt the hung child")
+
+    @unittest.skipUnless(os.name == "posix", "process groups are POSIX only")
+    def test_steamcmd_watchdog_kills_a_group_that_ignores_sigterm(self):
+        """A grandchild that ignores SIGTERM must not wedge the updater forever.
+
+        Confirmed on a real Linux host: the shell leader exits on SIGTERM, the
+        grandchild ignores it and keeps stdout open, and the read loop blocked
+        until an external timeout killed the whole updater. The old code also
+        stopped at the first successful wait(), so SIGKILL was never sent.
+        """
+        script = (
+            "#!/bin/bash\n"
+            "( trap '' TERM; sleep 137 ) &\n"
+            "echo spawned stubborn child\n"
+            "sleep 0.2\n"
+            "exit 0\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / "stubborn.sh"
+            fake.write_text(script, encoding="utf-8")
+            fake.chmod(0o755)
+            with patch.object(panel_update, "steam_update_command", return_value=["/bin/bash", str(fake)]), patch.object(
+                panel_update, "STEAMCMD_TERMINATE_GRACE", 1.0
+            ):
+                started = time.monotonic()
+                output, _code, timed_out = panel_update._run_steamcmd_once(timeout=2)
+                elapsed = time.monotonic() - started
+            leftovers = subprocess.run(["pgrep", "-f", "sleep 137"], capture_output=True, text=True).stdout.strip()
+        self.assertTrue(timed_out)
+        self.assertIn("spawned stubborn child", output)
+        self.assertLess(elapsed, 30, "watchdog blocked on a SIGTERM-ignoring grandchild")
+        self.assertEqual(leftovers, "", "grandchild survived the SIGKILL escalation")
 
     def test_fix_ownership_reports_chown_failure(self):
         with tempfile.TemporaryDirectory() as directory:

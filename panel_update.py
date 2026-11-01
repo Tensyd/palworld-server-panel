@@ -68,6 +68,9 @@ STEAMCMD_TCP = env_flag("STEAMCMD_TCP", True)
 STEAMCMD_RETRIES = env_int("STEAMCMD_RETRIES", 3, minimum=1)
 STEAMCMD_RETRY_DELAY = env_int("STEAMCMD_RETRY_DELAY", 30)
 STEAMCMD_ATTEMPT_TIMEOUT = env_int("STEAMCMD_ATTEMPT_TIMEOUT", 1800, minimum=60)
+# How long a terminated SteamCMD process group gets to honour SIGTERM before it
+# is killed outright.
+STEAMCMD_TERMINATE_GRACE = env_float("STEAMCMD_TERMINATE_GRACE", 10.0, minimum=1.0)
 
 MANIFEST_URL_TEMPLATE = os.environ.get("STEAM_MANIFEST_URL", "https://api.steamcmd.net/v1/info/{app}")
 MANIFEST_RETRIES = env_int("MANIFEST_RETRIES", 3, minimum=1)
@@ -570,34 +573,62 @@ def reset_stale_manifest() -> str:
     return str(backup_path)
 
 
-def _terminate_process(process: subprocess.Popen) -> None:
+def _terminate_process(process: subprocess.Popen, grace: float | None = None) -> None:
     """Take down SteamCMD, including the shell wrapper and its children.
 
-    The old code simply abandoned the child on timeout, so a hung SteamCMD kept
-    holding the game files and every later attempt failed too. ``killpg`` needs
-    a process group (POSIX only), hence the guarded fallbacks.
+    ``_run_steamcmd_once`` starts the child with ``start_new_session=True``, so
+    it is its own process-group leader and ``pgid == pid`` for the whole life of
+    the group -- even after the leader itself exits. The previous version called
+    ``os.getpgid(pid)`` at kill time and stopped at the first successful
+    ``wait()``: a leader that exits on SIGTERM while a grandchild ignores it made
+    the function return early, leaving the grandchild holding stdout and the
+    updater blocked on read forever (confirmed on a real Linux host).
     """
-    signals = [signal.SIGTERM]
-    kill_signal = getattr(signal, "SIGKILL", None)
-    if kill_signal is not None:
-        signals.append(kill_signal)
+    pid = getattr(process, "pid", None)
+    pgid: int | None = pid if pid else None
+    grace = STEAMCMD_TERMINATE_GRACE if grace is None else grace
 
-    for sig in signals:
-        try:
-            os.killpg(os.getpgid(process.pid), sig)
-        except (OSError, AttributeError):
+    def signal_group(sig: int) -> None:
+        if pgid is not None:
             try:
-                if sig == kill_signal:
-                    process.kill()
-                else:
-                    process.terminate()
-            except Exception:  # pragma: no cover - best effort only
+                os.killpg(pgid, sig)
+                return
+            except (OSError, AttributeError):
                 pass
         try:
-            process.wait(timeout=15)
-            return
-        except subprocess.TimeoutExpired:
-            continue
+            if sig == getattr(signal, "SIGKILL", None):
+                process.kill()
+            else:
+                process.terminate()
+        except Exception:  # pragma: no cover - best effort only
+            pass
+
+    def group_alive() -> bool:
+        if pgid is None:
+            return process.poll() is None
+        try:
+            os.killpg(pgid, 0)
+            return True
+        except (OSError, AttributeError):
+            return False
+
+    kill_signal = getattr(signal, "SIGKILL", None)
+    signal_group(signal.SIGTERM)
+
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if not group_alive():
+            break
+        time.sleep(0.2)
+
+    if group_alive() and kill_signal is not None:
+        log(f"process group {pgid} ignored SIGTERM after {grace}s, sending SIGKILL")
+        signal_group(kill_signal)
+
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:  # pragma: no cover - defensive
+        pass
 
 
 def _run_steamcmd_once(timeout: int) -> tuple[str, int, bool]:
