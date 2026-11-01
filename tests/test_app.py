@@ -454,6 +454,72 @@ class ModToggleTests(unittest.TestCase):
             self.assertEqual(sorted(path.name for path in disabled_dir.iterdir()), ["CoolMod.pak"])
             self.assertEqual(sorted(path.name for path in pak_dir.iterdir()), ["coolmod_extra.pak"])
 
+class TreeStatsTests(unittest.TestCase):
+    def test_one_walk_returns_size_and_newest_mtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sub").mkdir()
+            (root / "a.txt").write_text("x" * 100, encoding="utf-8")
+            (root / "sub" / "b.bin").write_bytes(b"y" * 50)
+            size, newest, symlink = app.tree_stats(root)
+        self.assertEqual(size, 150)
+        self.assertIsNotNone(newest)
+        self.assertFalse(symlink)
+
+    def test_stats_are_computed_once_per_request(self):
+        # dir_size() + latest_mtime() + has_symlink() used to scan the same tree
+        # two to four times per status response.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sub").mkdir()
+            (root / "sub" / "f").write_text("x", encoding="utf-8")
+            calls = []
+            real_scandir = app.os.scandir
+
+            def counting(path):
+                calls.append(str(path))
+                return real_scandir(path)
+
+            with app.app.test_request_context("/api/saves/status"), patch.object(app.os, "scandir", counting):
+                app.dir_size(root)
+                app.latest_mtime(root)
+                app.tree_stats(root)
+        self.assertEqual(len(calls), 2, calls)  # root and its one subdirectory
+
+    def test_symlinks_are_detected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "a.txt").write_text("x", encoding="utf-8")
+            try:
+                (root / "link").symlink_to(root / "a.txt")
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks need privileges on this platform")
+            self.assertTrue(app.has_symlink(root))
+
+
+class LogStreamLimitsTests(unittest.TestCase):
+    def setUp(self):
+        app._log_stream_clients = 0
+        self.addCleanup(setattr, app, "_log_stream_clients", 0)
+
+    def test_concurrent_streams_are_capped(self):
+        def one_shot():
+            yield "data: x" + chr(10) + chr(10)
+
+        with patch.object(app, "get_server_log_stream", one_shot), patch.object(app, "LOG_STREAM_MAX_CLIENTS", 2):
+            with app.app.test_request_context("/api/log/stream"):
+                first = app.api_log_stream()
+                second = app.api_log_stream()
+                third = app.app.make_response(app.api_log_stream())
+                self.assertEqual(third.status_code, 503)
+                self.assertIn("Retry-After", third.headers)
+                list(first.response)
+                list(second.response)
+                fourth = app.app.make_response(app.api_log_stream())
+                self.assertNotEqual(fourth.status_code, 503, "finished streams must release their slot")
+                list(fourth.response)
+        self.assertEqual(app._log_stream_clients, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+from flask import Flask, Response, g, has_request_context, jsonify, render_template, request, stream_with_context
 
 from rcon import execute_rcon_command, rcon_command as send_rcon_command
 
@@ -128,7 +128,14 @@ STRING_FIELDS = {
 }
 UNQUOTED_STRING_FIELDS: set[str] = set()
 SAVE_UPLOAD_MAX_EXTRACTED_BYTES = int(os.environ.get("SAVE_UPLOAD_MAX_EXTRACTED_BYTES", str(2 * 1024 * 1024 * 1024)))
-LOG_STREAM_MAX_SECONDS = int(os.environ.get("LOG_STREAM_MAX_SECONDS", "300"))
+# A log stream holds a request thread for its whole lifetime, and the panel
+# runs two workers x four threads. Five minutes per connection meant three open
+# log tabs could starve the control API, so the stream is shorter (clients
+# reconnect for more) and the number of concurrent streams is capped.
+LOG_STREAM_MAX_SECONDS = int(os.environ.get("LOG_STREAM_MAX_SECONDS", "60"))
+LOG_STREAM_MAX_CLIENTS = max(1, int(os.environ.get("LOG_STREAM_MAX_CLIENTS", "2")))
+_log_stream_clients = 0
+_log_stream_clients_lock = threading.Lock()
 UPDATE_TIMEOUT_SECONDS = int(os.environ.get("PALWORLD_UPDATE_TIMEOUT_SECONDS", "2700"))
 
 NUMERIC_RANGES = {
@@ -1372,25 +1379,82 @@ def assert_safe_managed_path(path: Path) -> Path:
     raise ValueError(f"Path is outside managed save roots: {path}")
 
 
+def tree_stats(path: Path, use_cache: bool = True) -> tuple[int, float | None, bool]:
+    """Walk a tree once and return (size, newest mtime, contains symlink).
+
+    dir_size(), latest_mtime() and has_symlink() each walked the whole tree
+    separately, and the save/mod status endpoints ask for the same slot several
+    times per response (list, active-slot match, summary). That meant three or
+    four full scans of a save directory for one JSON payload. One os.scandir
+    walk replaces them, memoised for the duration of the request only -- a
+    cross-request cache would serve stale sizes right after a save switch.
+    """
+    cache = None
+    if use_cache and has_request_context():
+        cache = getattr(g, "_tree_stats", None)
+        if cache is None:
+            cache = {}
+            g._tree_stats = cache
+    key = str(path)
+    if cache is not None and key in cache:
+        return cache[key]
+
+    size = 0
+    newest: float | None = None
+    symlink = False
+    if path.exists():
+        stack = [path]
+        while stack:
+            current = stack.pop()
+            try:
+                entries = list(os.scandir(current))
+            except OSError:
+                continue
+            for entry in entries:
+                try:
+                    if entry.is_symlink():
+                        symlink = True
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        info = entry.stat(follow_symlinks=False)
+                        size += info.st_size
+                        if newest is None or info.st_mtime > newest:
+                            newest = info.st_mtime
+                except OSError:
+                    continue
+        if newest is None:
+            try:
+                newest = path.stat().st_mtime
+            except OSError:
+                newest = None
+
+    result = (size, newest, symlink)
+    if cache is not None:
+        cache[key] = result
+    return result
+
+
 def has_symlink(path: Path) -> bool:
     if path.is_symlink():
         return True
     if path.is_dir():
-        return any(child.is_symlink() for child in path.rglob("*"))
+        # Never served from the request cache: this is a safety check made just
+        # before copying or replacing a tree.
+        return tree_stats(path, use_cache=False)[2]
     return False
 
 
 def dir_size(path: Path) -> int:
     if not path.exists():
         return 0
-    return sum(file.stat().st_size for file in path.rglob("*") if file.is_file())
+    return tree_stats(path)[0]
 
 
 def latest_mtime(path: Path) -> float | None:
     if not path.exists():
         return None
-    mtimes = [item.stat().st_mtime for item in path.rglob("*")]
-    return max(mtimes) if mtimes else path.stat().st_mtime
+    return tree_stats(path)[1]
 
 
 def format_ts(timestamp: float | None) -> str:
@@ -2994,8 +3058,26 @@ def api_log():
 
 @app.route("/api/log/stream")
 def api_log_stream():
+    global _log_stream_clients
+    with _log_stream_clients_lock:
+        if _log_stream_clients >= LOG_STREAM_MAX_CLIENTS:
+            return (
+                jsonify({"message": "日志流连接数已达上限，请稍后重试"}),
+                503,
+                {"Retry-After": "30"},
+            )
+        _log_stream_clients += 1
+
+    def generate():
+        global _log_stream_clients
+        try:
+            yield from get_server_log_stream()
+        finally:
+            with _log_stream_clients_lock:
+                _log_stream_clients = max(0, _log_stream_clients - 1)
+
     return Response(
-        stream_with_context(get_server_log_stream()),
+        stream_with_context(generate()),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

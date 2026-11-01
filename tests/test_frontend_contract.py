@@ -109,6 +109,18 @@ class FrontendSchemaTests(unittest.TestCase):
                 # A poller must never finish a dialog it no longer owns.
                 self.assertIn("if (mine()) finishProgressDialog(", poll)
 
+    def test_tab_strip_follows_the_aria_tabs_pattern(self):
+        self.assertIn('setAttribute("role", "tablist")', self.source)
+        self.assertIn("aria-controls", self.source)
+        self.assertIn('panel.setAttribute("role", "tabpanel")', self.source)
+        start = self.source.index("function switchTab(")
+        switch = self.source[start : self.source.index("\nfunction ", start + 1)]
+        self.assertIn('setAttribute("aria-selected"', switch)
+        self.assertIn("button.tabIndex = active ? 0 : -1", switch)
+        keys = self.source[self.source.index("function handleTabKeydown(") : self.source.index("function enhanceTabs(")]
+        for key in ("ArrowRight", "ArrowLeft", "Home", "End"):
+            self.assertIn(key, keys)
+
 
 if __name__ == "__main__":
     unittest.main()

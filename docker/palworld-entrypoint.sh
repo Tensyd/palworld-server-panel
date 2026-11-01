@@ -342,7 +342,6 @@ fi
 
 python3 - "${SETTINGS_FILE}" <<'PY'
 import os
-import re
 import sys
 
 path = sys.argv[1]
@@ -350,10 +349,10 @@ text = open(path, encoding="utf-8", errors="replace").read()
 if "OptionSettings=(" not in text:
     text = "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=()\n"
 
-values = {
-    "ServerName": '"' + os.environ.get("SERVER_NAME", "Palworld Docker Server").replace('"', '\\"') + '"',
-    "ServerDescription": '"' + os.environ.get("SERVER_DESCRIPTION", "Managed by Palworld Panel").replace('"', '\\"') + '"',
-    "ServerPlayerMaxNum": os.environ.get("SERVER_MAX_PLAYERS", "32"),
+# Fields the container owns: always taken from the environment, because the
+# published ports and the RCON credentials have to match what Docker and the
+# panel were configured with.
+managed = {
     "PublicPort": os.environ.get("PALWORLD_PORT", "8211"),
     "QueryPort": os.environ.get("PALWORLD_QUERY_PORT", "27015"),
     "RCONEnabled": "True",
@@ -361,18 +360,102 @@ values = {
     "RCONPort": os.environ.get("RCON_PORT", "25575"),
     "AdminPassword": '"' + os.environ["RCON_PASSWORD"].replace('"', '\\"') + '"',
 }
-
 if os.environ.get("PALWORLD_REST_ENABLED", "false").lower() in {"1", "true", "yes", "on"}:
-    values["RESTAPIEnabled"] = "True"
-    values["RESTAPIPort"] = os.environ.get("PALWORLD_REST_PORT", "8212")
+    managed["RESTAPIEnabled"] = "True"
+    managed["RESTAPIPort"] = os.environ.get("PALWORLD_REST_PORT", "8212")
 
-for key, value in values.items():
-    if f"{key}=" in text:
-        text = re.sub(rf"{re.escape(key)}=([^,\)]+)", f"{key}={value}", text)
-    else:
-        text = text.replace("OptionSettings=(", f"OptionSettings=({key}={value},", 1)
+# Fields the panel lets the operator edit. These are only seeded when the key
+# is missing: rewriting them on every boot silently reverted the name the user
+# had just saved.
+defaults = {
+    "ServerName": '"' + os.environ.get("SERVER_NAME", "Palworld Docker Server").replace('"', '\\"') + '"',
+    "ServerDescription": '"' + os.environ.get("SERVER_DESCRIPTION", "Managed by Palworld Panel").replace('"', '\\"') + '"',
+    "ServerPlayerMaxNum": os.environ.get("SERVER_MAX_PLAYERS", "32"),
+}
 
-open(path, "w", encoding="utf-8").write(text)
+
+def option_settings_bounds(document: str) -> tuple[int, int] | None:
+    """Return the (start, end) of the OptionSettings list body.
+
+    Values are quoted and may contain commas and parentheses, so the closing
+    bracket cannot be found with a regex -- scan instead of guessing.
+    """
+    marker = "OptionSettings=("
+    start = document.find(marker)
+    if start < 0:
+        return None
+    start += len(marker)
+    depth = 1
+    in_quotes = False
+    escaped = False
+    for index in range(start, len(document)):
+        char = document[index]
+        if escaped:
+            escaped = False
+        elif in_quotes and char == "\\":
+            escaped = True
+        elif char == '"':
+            in_quotes = not in_quotes
+        elif in_quotes:
+            continue
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return start, index
+    return None
+
+
+def split_entries(body: str) -> list[str]:
+    """Split on commas that are outside quotes."""
+    entries: list[str] = []
+    buffer: list[str] = []
+    in_quotes = False
+    escaped = False
+    for char in body:
+        if escaped:
+            buffer.append(char)
+            escaped = False
+        elif in_quotes and char == "\\":
+            buffer.append(char)
+            escaped = True
+        elif char == '"':
+            in_quotes = not in_quotes
+            buffer.append(char)
+        elif char == "," and not in_quotes:
+            entries.append("".join(buffer))
+            buffer = []
+        else:
+            buffer.append(char)
+    entries.append("".join(buffer))
+    return [entry for entry in entries if entry.strip()]
+
+
+bounds = option_settings_bounds(text)
+if bounds is None:
+    body, head, tail = "", "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(", ")\n"
+else:
+    start, end = bounds
+    head, body, tail = text[:start], text[start:end], text[end:]
+
+entries = split_entries(body)
+seen: set[str] = set()
+for index, entry in enumerate(entries):
+    key = entry.partition("=")[0].strip()
+    if key in managed:
+        entries[index] = f"{key}={managed[key]}"
+        seen.add(key)
+    elif key in defaults and entry.partition("=")[1]:
+        seen.add(key)
+for key, value in managed.items():
+    if key not in seen:
+        entries.append(f"{key}={value}")
+for key, value in defaults.items():
+    if key not in seen:
+        entries.append(f"{key}={value}")
+
+open(path, "w", encoding="utf-8").write(head + ",".join(entries) + tail)
 PY
 chown "${PALWORLD_USER}:${PALWORLD_USER}" "${SETTINGS_FILE}"
 

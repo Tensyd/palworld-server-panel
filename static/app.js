@@ -993,6 +993,42 @@ function setUsageCard(id, percent) {
     card.style.setProperty("--usage", `${value}%`);
 }
 
+function handleTabKeydown(event, index, tabs) {
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    let next = null;
+    if (step) next = (index + step + tabs.length) % tabs.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = tabs.length - 1;
+    if (next === null) return;
+    event.preventDefault();
+    tabs[next].focus();
+    tabs[next].click();
+}
+
+function enhanceTabs() {
+    // The strip is plain buttons with no ARIA wiring; announce it as a tablist
+    // and let the keyboard reach it (arrow keys, Home/End) without editing ten
+    // buttons by hand.
+    const tabs = $$(".tab-button");
+    const list = $(".tabs");
+    if (list) list.setAttribute("role", "tablist");
+    tabs.forEach((button, index) => {
+        const name = button.dataset.tab;
+        const panel = $(`#tab-${name}`);
+        button.id = `tabbtn-${name}`;
+        button.setAttribute("role", "tab");
+        button.setAttribute("aria-controls", `tab-${name}`);
+        const active = button.classList.contains("is-active");
+        button.setAttribute("aria-selected", active ? "true" : "false");
+        button.tabIndex = active ? 0 : -1;
+        if (panel) {
+            panel.setAttribute("role", "tabpanel");
+            panel.setAttribute("aria-labelledby", button.id);
+        }
+        button.addEventListener("keydown", (event) => handleTabKeydown(event, index, tabs));
+    });
+}
+
 function switchTab(tab) {
     if (state.currentTab === tab) return;
     if (state.tabTransitionTimer) {
@@ -1005,7 +1041,14 @@ function switchTab(tab) {
     if (!nextPanel) return;
 
     state.currentTab = tab;
-    $$(".tab-button").forEach((button) => button.classList.toggle("is-active", button.dataset.tab === tab));
+    $$(".tab-button").forEach((button) => {
+        const active = button.dataset.tab === tab;
+        button.classList.toggle("is-active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+        // Only the selected tab stays in the tab order, per the ARIA tabs
+        // pattern: Tab moves into the strip, arrows move inside it.
+        button.tabIndex = active ? 0 : -1;
+    });
     updateTabIndicator();
 
     $$(".tab-panel").forEach((panel) => {
@@ -3350,6 +3393,7 @@ function bindEvents() {
     $$(".quick-command").forEach((button) => {
         button.addEventListener("click", () => quickRconCommand(button.dataset.rconCommand));
     });
+    enhanceTabs();
     $$(".tab-button").forEach((button) => {
         button.addEventListener("click", () => switchTab(button.dataset.tab));
     });
