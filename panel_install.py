@@ -574,8 +574,14 @@ def install_privileged_copy() -> None:
     """
     status.step("systemd", "active", "Installing root-owned installer copy")
     run_checked(["install", "-d", "-o", "root", "-g", "root", "-m", "755", str(ROOT_EXEC_DIR)], timeout=30)
+    source = Path(__file__).resolve()
+    destination = (ROOT_EXEC_DIR / "panel_install.py").resolve()
+    if source == destination:
+        # Already running from the published copy (install.sh invokes that one),
+        # and `install a a` refuses to work on identical files.
+        return
     run_checked(
-        ["install", "-o", "root", "-g", "root", "-m", "755", str(Path(__file__).resolve()), str(ROOT_EXEC_DIR / "panel_install.py")],
+        ["install", "-o", "root", "-g", "root", "-m", "755", str(source), str(destination)],
         timeout=30,
     )
 

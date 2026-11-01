@@ -17,6 +17,21 @@ import panel_update
 class PanelUpdateTests(unittest.TestCase):
     def setUp(self):
         panel_update.status = panel_update.UpdateStatus()
+        # Module defaults live under /home/demo, which on a real host is mode 700
+        # and owned by the service account: even Path.exists() raises there. Pin
+        # every path to a temp dir so the suite does not depend on who runs it.
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        root = Path(self.temp_dir.name)
+        for name, value in (
+            ("STATUS_PATH", root / "update-status.json"),
+            ("LOG_PATH", root / "update.log"),
+            ("AUDIT_LOG", root / "audit.log"),
+            ("SAVE_SLOT_ROOT", root / "save-slots"),
+            ("SAVE_BACKUP_DIR", root / "save-slots" / "backups"),
+            ("SAVE_LOCK_PATH", root / "save-slots" / ".operation.lock"),
+        ):
+            patch.object(panel_update, name, value).start()
         self.write_json = patch.object(panel_update, "write_json").start()
         # log() writes to LOG_PATH, whose default is under /home/demo. That does
         # not exist -- and is not writable -- on a fresh host, so without this
@@ -296,6 +311,15 @@ class PanelUpdateTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "denied"):
                     panel_update.fix_ownership()
+
+    def test_status_load_survives_an_unreadable_directory(self):
+        class Unreadable:
+            def exists(self):
+                raise PermissionError(13, "Permission denied")
+
+        with patch.object(panel_update, "STATUS_PATH", Unreadable()):
+            panel_update.status.load_existing()
+        self.assertEqual(panel_update.status.payload["phase"], "idle")
 
 
 if __name__ == "__main__":

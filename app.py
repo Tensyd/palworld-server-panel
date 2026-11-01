@@ -1459,11 +1459,14 @@ def set_recorded_active_slot(slot_id: str, world_id: str) -> None:
 
 
 def read_json(path: Path, default: dict[str, Any]) -> dict[str, Any]:
-    if not path.exists():
-        return default
+    # exists() raises when an ancestor is not traversable rather than returning
+    # False, so a panel pointed at a directory it cannot read must degrade to
+    # the default instead of 500-ing every endpoint that touches state.
     try:
+        if not path.exists():
+            return default
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, ValueError):
         return default
 
 

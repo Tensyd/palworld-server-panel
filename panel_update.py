@@ -165,11 +165,14 @@ class UpdateStatus:
         }
 
     def load_existing(self) -> None:
-        if not STATUS_PATH.exists():
-            return
+        # exists() itself raises when an ancestor is not traversable (a service
+        # user without access to PANEL_DIR). Treat any OSError as "no previous
+        # status" so the updater still runs instead of dying before step one.
         try:
+            if not STATUS_PATH.exists():
+                return
             existing = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, ValueError):
             return
         if isinstance(existing, dict):
             self.payload.update(existing)

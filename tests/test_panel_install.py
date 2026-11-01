@@ -98,8 +98,23 @@ class PrivilegedBoundaryTests(unittest.TestCase):
         cmd = copies[0]
         self.assertEqual(cmd[1:7], ["-o", "root", "-g", "root", "-m", "755"])
         self.assertTrue(cmd[7].endswith("panel_install.py"))
-        self.assertEqual(cmd[8], str(panel_install.ROOT_EXEC_DIR / "panel_install.py"))
+        self.assertEqual(Path(cmd[8]).resolve(), (panel_install.ROOT_EXEC_DIR / "panel_install.py").resolve())
         status.step.assert_called()
+
+    def test_running_from_the_published_copy_does_not_copy_onto_itself(self):
+        # install.sh invokes the root copy, which then re-runs this step.
+        # `install a a` refuses identical files and aborted the whole repair.
+        published = str(panel_install.ROOT_EXEC_DIR / "panel_install.py")
+        with patch.object(panel_install, "run_checked") as run_checked, patch.object(
+            panel_install, "status"
+        ), patch.object(panel_install, "__file__", published):
+            panel_install.install_privileged_copy()
+        copies = [
+            call.args[0]
+            for call in run_checked.call_args_list
+            if call.args[0][0] == "install" and "-d" not in call.args[0]
+        ]
+        self.assertEqual(copies, [], "copied the installer onto itself")
 
 
 if __name__ == "__main__":
