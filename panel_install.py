@@ -374,7 +374,11 @@ def configure_palworld() -> str:
         world_id = secrets.token_hex(16).upper()
         game_user.write_text(f"[/Script/Pal.PalGameInstance]\nDedicatedServerName={world_id}\n", encoding="utf-8")
 
-    run_checked(["chown", "-R", f"{PANEL_USER}:{PANEL_USER}", str(PALWORLD_DIR / "Pal" / "Saved")], timeout=120)
+    # The whole game tree belongs to the panel user: the game service runs as
+    # that user, and so does SteamCMD, which has to create steamapps/ and the
+    # .acf manifest. Chowning only Pal/Saved left a panel-only install with a
+    # root-owned palworld/ where every update died on "Permission denied".
+    run_checked(["chown", "-R", f"{PANEL_USER}:{PANEL_USER}", str(PALWORLD_DIR)], timeout=300)
     status.step("config", "done", "Config generated")
     return admin_password
 
@@ -529,12 +533,12 @@ def render_sudoers() -> str:
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/journalctl -u palworld.service *
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/chown -R {PANEL_USER}\\:{PANEL_USER} {PALWORLD_DIR}/Pal/Saved/SaveGames
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/chown -R {PANEL_USER}\\:{PANEL_USER} {PALWORLD_DIR}/Pal/Saved/Config/LinuxServer
-{PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start palworld-panel-update.service
+{PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start palworld-panel-update.service
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active palworld-panel-update.service
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start palworld-panel-auto-update.service
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active palworld-panel-auto-update.service
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active palworld-panel-update.timer
-{PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start palworld-panel-install.service
+{PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start palworld-panel-install.service
 {PANEL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active palworld-panel-install.service
 """
 

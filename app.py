@@ -1169,7 +1169,10 @@ def start_update_service() -> tuple[bool, str]:
         return False, "更新任务正在运行（状态文件标记为运行中，请稍后再试或查看 update.log）"
     if not update_status.get("update_available"):
         return False, "当前没有检测到可用更新，请先点击检查更新"
-    _, err, code = systemctl("start", UPDATE_SERVICE, timeout=20)
+    # --no-block: a oneshot update runs for many minutes. Blocking here made the
+    # HTTP call die at 20s with "Command timed out" while the unit kept going,
+    # so the panel reported failure for a job that was still working.
+    _, err, code = systemctl("--no-block", "start", UPDATE_SERVICE, timeout=20)
     if code != 0:
         return False, err or f"systemctl start {UPDATE_SERVICE} exited with {code}"
     return True, "更新任务已在后台启动"
@@ -1253,7 +1256,7 @@ def start_install_service(action: str) -> tuple[bool, str]:
     if service_state_is_busy(active):
         return False, "安装任务正在运行"
     write_json(INSTALL_REQUEST, {"action": action, "requested_at": iso_now()})
-    _, err, code = systemctl("start", INSTALL_SERVICE, timeout=20)
+    _, err, code = systemctl("--no-block", "start", INSTALL_SERVICE, timeout=20)
     if code != 0:
         return False, err or f"systemctl start {INSTALL_SERVICE} exited with {code}"
     return True, "安装任务已在后台启动"

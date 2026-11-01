@@ -37,8 +37,16 @@ class ServiceFileTests(unittest.TestCase):
 
     def test_sudoers_covers_both_updater_units(self):
         sudoers = panel_install.render_sudoers()
-        self.assertIn("systemctl start palworld-panel-update.service", sudoers)
-        self.assertIn("systemctl start palworld-panel-auto-update.service", sudoers)
+        # --no-block: a blocking start made the HTTP call time out while the
+        # oneshot kept running. sudo matches the full command line, so the rule
+        # has to spell the flag out.
+        self.assertIn("--no-block start palworld-panel-update.service", sudoers)
+        self.assertIn("--no-block start palworld-panel-install.service", sudoers)
+        self.assertIn("is-active palworld-panel-update.timer", sudoers)
+
+    def test_deploy_sudoers_match_the_installer(self):
+        on_disk = (DEPLOY_DIR / "palworld-panel.sudoers").read_text(encoding="utf-8")
+        self.assertEqual(directives(panel_install.render_sudoers()), directives(on_disk))
 
     def test_deploy_copies_do_not_drift_from_the_installer(self):
         """``deploy/`` is reference material; the installer is what actually ships."""

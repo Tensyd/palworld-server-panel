@@ -335,6 +335,18 @@ class ConfigAndStatusTests(unittest.TestCase):
         self.assertTrue(result["running"])
         write_json.assert_not_called()
 
+    def test_starting_the_update_service_does_not_block(self):
+        """A blocking start timed out at 20s while the update kept running."""
+        with patch.object(app, "using_docker_backend", return_value=False), patch.object(
+            app, "systemctl_query", return_value=("inactive", "", 3)
+        ), patch.object(app, "read_update_status", return_value={"update_available": True, "running": False}), patch.object(
+            app, "systemctl", return_value=("", "", 0)
+        ) as systemctl:
+            ok, _message = app.start_update_service()
+        self.assertTrue(ok)
+        systemctl.assert_called_once()
+        self.assertEqual(systemctl.call_args.args[0], "--no-block")
+
     def test_transitional_service_states_count_as_busy(self):
         for state in ("active", "activating", "reloading", "deactivating"):
             self.assertTrue(app.service_state_is_busy(state), state)
