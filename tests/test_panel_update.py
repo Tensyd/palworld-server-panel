@@ -30,6 +30,11 @@ class PanelUpdateTests(unittest.TestCase):
             ("SAVE_SLOT_ROOT", root / "save-slots"),
             ("SAVE_BACKUP_DIR", root / "save-slots" / "backups"),
             ("SAVE_LOCK_PATH", root / "save-slots" / ".operation.lock"),
+            ("PALWORLD_DIR", root / "palworld"),
+            ("APP_MANIFEST", root / "palworld" / "steamapps" / "appmanifest_2394010.acf"),
+            ("CONFIG_DIR", root / "palworld" / "Pal" / "Saved" / "Config" / "LinuxServer"),
+            ("GAME_USER_SETTINGS", root / "palworld" / "Pal" / "Saved" / "Config" / "LinuxServer" / "GameUserSettings.ini"),
+            ("ACTIVE_SAVEGAMES_DIR", root / "palworld" / "Pal" / "Saved" / "SaveGames" / "0"),
         ):
             patch.object(panel_update, name, value).start()
         self.write_json = patch.object(panel_update, "write_json").start()
@@ -320,6 +325,13 @@ class PanelUpdateTests(unittest.TestCase):
         with patch.object(panel_update, "STATUS_PATH", Unreadable()):
             panel_update.status.load_existing()
         self.assertEqual(panel_update.status.payload["phase"], "idle")
+
+    def test_path_exists_treats_an_unreadable_parent_as_absent(self):
+        class Unreadable:
+            def exists(self):
+                raise PermissionError(13, "Permission denied")
+
+        self.assertFalse(panel_update.path_exists(Unreadable()))
 
 
 if __name__ == "__main__":

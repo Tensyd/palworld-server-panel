@@ -99,6 +99,21 @@ GAME_USER_SETTINGS = CONFIG_DIR / "GameUserSettings.ini"
 APP_MANIFEST = PALWORLD_DIR / "steamapps" / f"appmanifest_{PALWORLD_APP_ID}.acf"
 
 
+def path_exists(path: Path) -> bool:
+    """An existence check that cannot raise.
+
+    Path.exists() propagates PermissionError when an ancestor directory is not
+    traversable -- which is what running the updater as the wrong user looks
+    like. Callers want to distinguish "there" from "not there", not crash with a
+    traceback instead of a readable message, so an unanswerable check counts as
+    absent.
+    """
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 def iso_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
@@ -252,7 +267,7 @@ def wait_for_service(active: bool, timeout: int = 120) -> bool:
 
 
 def parse_local_manifest() -> dict[str, str]:
-    text = APP_MANIFEST.read_text(encoding="utf-8", errors="replace") if APP_MANIFEST.exists() else ""
+    text = APP_MANIFEST.read_text(encoding="utf-8", errors="replace") if path_exists(APP_MANIFEST) else ""
     buildid = ""
     build_match = re.search(r'"buildid"\s+"([^"]+)"', text)
     if build_match:
@@ -324,7 +339,7 @@ def server_looks_installed() -> bool:
         PALWORLD_DIR / "Pal" / "Binaries" / "Linux" / "PalServer-Linux-Shipping",
         APP_MANIFEST,
     )
-    return any(path.exists() for path in candidates)
+    return any(path_exists(path) for path in candidates)
 
 
 def check_update() -> dict[str, Any]:
@@ -470,20 +485,20 @@ def countdown_if_needed(minutes: int) -> None:
 
 
 def current_world_id() -> str:
-    if GAME_USER_SETTINGS.exists():
+    if path_exists(GAME_USER_SETTINGS):
         text = GAME_USER_SETTINGS.read_text(encoding="utf-8", errors="replace")
         match = re.search(r"^DedicatedServerName=(.+)$", text, flags=re.M)
         if match:
             return match.group(1).strip()
-    if ACTIVE_SAVEGAMES_DIR.exists():
+    if path_exists(ACTIVE_SAVEGAMES_DIR):
         for item in sorted(ACTIVE_SAVEGAMES_DIR.iterdir()):
-            if item.is_dir() and (item / "Level.sav").exists():
+            if item.is_dir() and path_exists(item / "Level.sav"):
                 return item.name
     return "unknown"
 
 
 def backup_current_save() -> str:
-    if not ACTIVE_SAVEGAMES_DIR.exists() or not any(ACTIVE_SAVEGAMES_DIR.iterdir()):
+    if not path_exists(ACTIVE_SAVEGAMES_DIR) or not any(ACTIVE_SAVEGAMES_DIR.iterdir()):
         return "skipped-empty-save"
     SAVE_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     world_id = current_world_id()
@@ -499,7 +514,7 @@ def backup_current_save() -> str:
         target = SAVE_BACKUP_DIR / f"{backup_id}-{suffix}"
     backup_id = target.name
     shutil.copytree(ACTIVE_SAVEGAMES_DIR, target / "SaveGames" / "0", symlinks=False)
-    if CONFIG_DIR.exists():
+    if path_exists(CONFIG_DIR):
         shutil.copytree(CONFIG_DIR, target / "Config" / "LinuxServer", symlinks=False)
     write_json(
         target / "metadata.json",
@@ -520,7 +535,7 @@ def fix_ownership() -> None:
     ]
     owner = f"{PANEL_USER}:{PANEL_USER}"
     for path in paths:
-        if path.exists():
+        if path_exists(path):
             _, error, code = run_privileged([CHOWN, "-R", owner, str(path)], timeout=180)
             if code != 0:
                 raise RuntimeError(error or f"failed to set ownership on {path}")
@@ -561,9 +576,12 @@ def steam_update_command() -> list[str]:
 
 
 def manifest_state_flags() -> str:
-    if not APP_MANIFEST.exists():
+    if not path_exists(APP_MANIFEST):
         return ""
-    text = APP_MANIFEST.read_text(encoding="utf-8", errors="replace")
+    try:
+        text = APP_MANIFEST.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
     match = re.search(r'"StateFlags"\s+"([^"]+)"', text)
     return match.group(1).strip() if match else ""
 
