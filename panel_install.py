@@ -38,6 +38,9 @@ STEAMCMD = Path(os.environ.get("STEAMCMD", str(STEAMCMD_DIR / "steamcmd.sh")))
 PALWORLD_SERVICE = os.environ.get("PALWORLD_SERVICE", "palworld.service")
 PANEL_SERVICE = os.environ.get("PANEL_SERVICE", "palworld-panel.service")
 INSTALL_SERVICE = os.environ.get("PANEL_INSTALL_SERVICE", "palworld-panel-install.service")
+UPDATE_SERVICE = os.environ.get("PANEL_UPDATE_SERVICE", "palworld-panel-update.service")
+AUTO_UPDATE_SERVICE = os.environ.get("PANEL_AUTO_UPDATE_SERVICE", "palworld-panel-auto-update.service")
+UPDATE_TIMER = os.environ.get("PANEL_UPDATE_TIMER", "palworld-panel-update.timer")
 PALWORLD_APP_ID = os.environ.get("PALWORLD_APP_ID", "2394010")
 PANEL_PORT = os.environ.get("PANEL_PORT", "8080")
 RCON_PORT = os.environ.get("RCON_PORT", "25575")
@@ -552,7 +555,7 @@ WantedBy=timers.target
         "palworld-panel-install.service": install_service,
         "palworld-panel-update.service": update_service,
         "palworld-panel-auto-update.service": auto_update_service,
-        "palworld-panel-update.timer": update_timer,
+        UPDATE_TIMER: update_timer,
     }
 
 
@@ -575,6 +578,22 @@ def render_sudoers() -> str:
 """
 
 
+def unit_enable_commands() -> list[list[str]]:
+    """Units that must be active after an install or a repair.
+
+    The timer used to be written and then forgotten: `systemctl is-enabled
+    palworld-panel-update.timer` stayed "disabled" on a fresh install, so the
+    scheduled updater -- the whole point of the split -- never ran once. `--now`
+    starts it as well as enabling it, otherwise it would sleep until the next
+    boot.
+    """
+    return [
+        ["systemctl", "enable", PANEL_SERVICE],
+        ["systemctl", "enable", PALWORLD_SERVICE],
+        ["systemctl", "enable", "--now", UPDATE_TIMER],
+    ]
+
+
 def write_service_files() -> None:
     status.step("systemd", "active", "Installing systemd units and sudoers")
     for name, content in render_service_files().items():
@@ -584,8 +603,8 @@ def write_service_files() -> None:
     run_checked(["chmod", "440", str(sudoers_path)], timeout=30)
     run_checked(["visudo", "-cf", str(sudoers_path)], timeout=30)
     run_checked(["systemctl", "daemon-reload"], timeout=60)
-    run_checked(["systemctl", "enable", PANEL_SERVICE], timeout=60)
-    run_checked(["systemctl", "enable", PALWORLD_SERVICE], timeout=60)
+    for command in unit_enable_commands():
+        run_checked(command, timeout=60)
     status.step("systemd", "done", "Systemd units installed")
 
 

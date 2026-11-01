@@ -170,6 +170,16 @@ class ConfigPasswordTests(unittest.TestCase):
         self.assertEqual(values["RCON_PASSWORD"], "keep-me")
         self.assertEqual(values["PANEL_PORT"], "8080")
 
+    def test_the_timer_is_enabled_and_started(self):
+        # The timer used to be rendered but never enabled, so the scheduled
+        # updater never ran on a fresh install.
+        commands = panel_install.unit_enable_commands()
+        self.assertIn(["systemctl", "enable", "--now", panel_install.UPDATE_TIMER], commands)
+        targets = {command[-1] for command in commands}
+        self.assertIn(panel_install.PANEL_SERVICE, targets)
+        self.assertIn(panel_install.PALWORLD_SERVICE, targets)
+        self.assertIn(panel_install.UPDATE_TIMER, targets)
+
 
 if __name__ == "__main__":
     unittest.main()
