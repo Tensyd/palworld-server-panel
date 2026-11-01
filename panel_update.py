@@ -796,7 +796,15 @@ def run_steam_update(expected_manifest: str = "") -> None:
             break
 
         if needs_manifest_reset(last_output):
+            # Steam refused the job because of the local manifest (state 0x6 /
+            # Access Denied). The backoff exists for flaky network conditions;
+            # there is nothing to wait for once the bad file is out of the way,
+            # so retry at once instead of making the operator watch a 30s pause
+            # that says nothing useful.
             reset_stale_manifest()
+            status.step("update", "active", f"第 {attempt}/{attempts} 次发现本地清单损坏，已重置，立即重试")
+            log(f"SteamCMD attempt {attempt}/{attempts} hit a corrupt manifest; reset it and retrying immediately")
+            continue
 
         status.step(
             "update",

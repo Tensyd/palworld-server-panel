@@ -384,6 +384,26 @@ class PanelUpdateTests(unittest.TestCase):
         self.assertIn("还有 2 次机会", retry_messages[0])
         self.assertNotIn("失败", "".join(retry_messages), "the retry notice must not read as a final failure")
 
+    def test_a_corrupt_manifest_is_retried_without_the_backoff(self):
+        # Steam answers "state is 0x6" when its local manifest is unusable.
+        # Waiting the network backoff for that is pure dead time: the bad file
+        # is already gone, so the retry can start at once.
+        messages: list[str] = []
+        results = [("Error! App '2394010' state is 0x6 after update job.", 8, False), ("Success!", 0, False)]
+
+        with patch.object(panel_update, "_run_steamcmd_once", side_effect=lambda timeout, cb=None: results.pop(0)), patch.object(
+            panel_update, "parse_local_manifest", return_value={"manifest": "m1"}
+        ), patch.object(panel_update.status, "step", side_effect=lambda name, status, message="": messages.append(message)), patch.object(
+            panel_update, "needs_manifest_reset", return_value=True
+        ), patch.object(panel_update, "reset_stale_manifest") as reset, patch.object(
+            panel_update, "log"
+        ), patch.object(panel_update.time, "sleep") as sleep:
+            panel_update.run_steam_update("m1")
+
+        reset.assert_called_once()
+        sleep.assert_not_called()
+        self.assertTrue(any("本地清单损坏" in message for message in messages), messages)
+
 
 if __name__ == "__main__":
     unittest.main()
