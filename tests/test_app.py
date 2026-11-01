@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import importlib.util
 import io
 from pathlib import Path
+import re
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -38,6 +39,27 @@ class ConfigAndStatusTests(unittest.TestCase):
         text = entrypoint.read_text(encoding="utf-8")
         self.assertIn("refresh_steamcmd_app_info", text)
         self.assertIn('refresh_steamcmd_app_info "${steamcmd_network_mode}" && run_steamcmd', text)
+
+    def test_embedded_python_blocks_in_shell_scripts_compile(self):
+        """``bash -n`` never looks inside a heredoc, so compile the blocks here.
+
+        A one-character indentation slip in write_status() made every Docker
+        game container exit before the server started, and neither `bash -n`
+        in CI nor any test noticed. Confirmed on a real Debian host.
+        """
+        root = Path(__file__).parents[1]
+        for name in ("docker/palworld-entrypoint.sh", "install.sh"):
+            lines = (root / name).read_text(encoding="utf-8").splitlines()
+            blocks = 0
+            for index, line in enumerate(lines):
+                if not re.search(r"<<-?\s*'?PY'?", line):
+                    continue
+                end = next((j for j in range(index + 1, len(lines)) if lines[j].strip() == "PY"), None)
+                self.assertIsNotNone(end, f"{name}: unterminated PY heredoc at line {index + 1}")
+                with self.subTest(file=name, line=index + 1):
+                    compile("\n".join(lines[index + 1:end]), f"{name}:{index + 1}", "exec")
+                blocks += 1
+            self.assertGreater(blocks, 0, f"{name}: no PY heredocs found")
 
     @classmethod
     def setUpClass(cls):

@@ -36,7 +36,9 @@ write_status() {
   mkdir -p "$(dirname "${status_file}")"
   python3 - "${status_file}" "${phase}" "${message}" "${success}" "${update_success}" "${fallback_used}" "${steamcmd_exit_code}" "${steamcmd_detail}" "${request_id}" <<'PY'
 import json
+import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 
 path, phase, message, success, update_success, fallback_used, steamcmd_exit_code, steamcmd_detail, request_id = sys.argv[1:10]
@@ -56,22 +58,21 @@ if steamcmd_detail:
     payload["steamcmd_detail"] = steamcmd_detail
 if request_id:
     payload["request_id"] = request_id
- import os
- import tempfile
- directory = os.path.dirname(path) or "."
- fd, tmp = tempfile.mkstemp(prefix="." + os.path.basename(path) + ".", suffix=".tmp", dir=directory)
- try:
-     with os.fdopen(fd, "w", encoding="utf-8") as fh:
-         json.dump(payload, fh, ensure_ascii=False, indent=2)
-         fh.write("\n")
-         fh.flush()
-         os.fsync(fh.fileno())
-     os.replace(tmp, path)
- finally:
-     try:
-         os.unlink(tmp)
-     except FileNotFoundError:
-         pass
+
+directory = os.path.dirname(path) or "."
+fd, tmp = tempfile.mkstemp(prefix="." + os.path.basename(path) + ".", suffix=".tmp", dir=directory)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+finally:
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
 PY
 }
 
