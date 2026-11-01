@@ -8,7 +8,7 @@ User=demo
 WorkingDirectory=/home/demo/palworld-panel
 Environment=HOME=/home/demo
 EnvironmentFile=/etc/palworld-panel.env
-ExecStart=/usr/bin/gunicorn --config /home/demo/palworld-panel/gunicorn.conf.py app:app
+ExecStart=/home/demo/palworld-panel/.venv/bin/gunicorn --config /home/demo/palworld-panel/gunicorn.conf.py app:app
 Restart=on-failure
 RestartSec=5
 

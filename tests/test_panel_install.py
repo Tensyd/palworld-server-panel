@@ -44,6 +44,7 @@ class ServiceFileTests(unittest.TestCase):
         """``deploy/`` is reference material; the installer is what actually ships."""
         units = panel_install.render_service_files()
         for name in (
+            "palworld-panel.service",
             "palworld-panel-update.service",
             "palworld-panel-auto-update.service",
             "palworld-panel-update.timer",

@@ -25,6 +25,7 @@ from typing import Any
 PANEL_USER = os.environ.get("PANEL_USER", "demo")
 PANEL_HOME = Path(os.environ.get("PANEL_HOME", f"/home/{PANEL_USER}"))
 PANEL_DIR = Path(os.environ.get("PANEL_DIR", str(PANEL_HOME / "palworld-panel")))
+VENV_DIR = PANEL_DIR / ".venv"
 PALWORLD_DIR = Path(os.environ.get("PALWORLD_DIR", str(PANEL_HOME / "palworld")))
 STEAMCMD_DIR = Path(os.environ.get("STEAMCMD_DIR", str(PANEL_HOME / "steamcmd")))
 STEAMCMD = Path(os.environ.get("STEAMCMD", str(STEAMCMD_DIR / "steamcmd.sh")))
@@ -253,6 +254,25 @@ def install_dependencies() -> None:
     status.step("dependencies", "done", "Dependencies installed")
 
 
+def install_python_deps() -> None:
+    """Install requirements.txt into a venv next to the panel.
+
+    Nothing used to do this: the unit ran /usr/bin/gunicorn against system
+    Python, and requirements.txt was never installed anywhere, so a fresh
+    install crash-looped with ModuleNotFoundError: No module named 'flask'.
+    """
+    status.step("python", "active", "Installing panel Python dependencies")
+    venv_python = VENV_DIR / "bin" / "python"
+    if not venv_python.exists():
+        run_as_user(["python3", "-m", "venv", str(VENV_DIR)], timeout=300)
+    requirements = PANEL_DIR / "requirements.txt"
+    if not requirements.exists():
+        raise RuntimeError(f"missing {requirements}")
+    run_as_user([str(venv_python), "-m", "pip", "install", "--upgrade", "--quiet", "pip"], timeout=600)
+    run_as_user([str(venv_python), "-m", "pip", "install", "--quiet", "-r", str(requirements)], timeout=900)
+    status.step("python", "done", str(VENV_DIR))
+
+
 def install_steamcmd() -> None:
     status.step("steamcmd", "active", "Installing SteamCMD")
     if STEAMCMD.exists():
@@ -418,7 +438,7 @@ User={PANEL_USER}
 WorkingDirectory={PANEL_DIR}
 Environment=HOME={PANEL_HOME}
 EnvironmentFile={ENV_FILE}
-ExecStart=/usr/bin/gunicorn --config {PANEL_DIR}/gunicorn.conf.py app:app
+ExecStart={VENV_DIR}/bin/gunicorn --config {PANEL_DIR}/gunicorn.conf.py app:app
 Restart=on-failure
 RestartSec=5
 
@@ -546,6 +566,7 @@ def repair() -> None:
     try:
         ensure_user()
         install_panel_files()
+        install_python_deps()
         configure_palworld()
         write_service_files()
         check_environment()
