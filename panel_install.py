@@ -318,15 +318,22 @@ def install_palworld_server() -> None:
     status.step("palworld", "done", "Palworld server installed")
 
 
+def read_env_values(path: Path) -> dict[str, str]:
+    """Parse a key=value environment file, ignoring blanks and comments."""
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip() or line.strip().startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
 def upsert_env(path: Path, values: dict[str, str], overwrite_empty: bool = True) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing: dict[str, str] = {}
-    if path.exists():
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if not line.strip() or line.strip().startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            existing[key.strip()] = value.strip()
+    existing = read_env_values(path)
     for key, value in values.items():
         if key not in existing or (overwrite_empty and not existing[key]):
             existing[key] = value
@@ -338,7 +345,17 @@ def upsert_env(path: Path, values: dict[str, str], overwrite_empty: bool = True)
 
 def configure_palworld() -> str:
     status.step("config", "active", "Generating panel env and Palworld config")
-    admin_password = os.environ.get("RCON_PASSWORD") or secrets.token_urlsafe(18)
+    # The env file and the game config have to carry the same password, or the
+    # panel's RCON never authenticates ("Auth failed" on every command). This
+    # used to generate a fresh value whenever RCON_PASSWORD was not exported --
+    # install.sh never exports it -- while upsert_env() refused to overwrite the
+    # one already in the file, so the two drifted apart on every reinstall.
+    previous_env = read_env_values(ENV_FILE)
+    admin_password = (
+        os.environ.get("RCON_PASSWORD")
+        or previous_env.get("RCON_PASSWORD")
+        or secrets.token_urlsafe(18)
+    )
     upsert_env(
         ENV_FILE,
         {
@@ -368,12 +385,18 @@ def configure_palworld() -> str:
     config_dir = PALWORLD_DIR / "Pal" / "Saved" / "Config" / "LinuxServer"
     config_dir.mkdir(parents=True, exist_ok=True)
     settings = config_dir / "PalWorldSettings.ini"
-    if not settings.exists():
+    if settings.exists():
+        base = settings.read_text(encoding="utf-8", errors="replace")
+    else:
         default_settings = PALWORLD_DIR / "DefaultPalWorldSettings.ini"
         base = default_settings.read_text(encoding="utf-8", errors="replace") if default_settings.exists() else "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=()\n"
-        if "OptionSettings=(" in base:
-            base = reconfigure_option(base, admin_password)
-        settings.write_text(base, encoding="utf-8")
+    # These five keys are deployment-managed (the panel refuses to edit them), so
+    # they are re-applied on every run instead of only when the file is created.
+    # Otherwise a config the game wrote itself keeps whatever password the
+    # server started with and the panel can never authenticate.
+    if "OptionSettings=(" in base:
+        base = reconfigure_option(base, admin_password)
+    settings.write_text(base, encoding="utf-8")
 
     game_user = config_dir / "GameUserSettings.ini"
     if not game_user.exists():
@@ -398,8 +421,11 @@ def reconfigure_option(text: str, admin_password: str) -> str:
         "QueryPort": QUERY_PORT,
     }
     for key, value in replacements.items():
-        if f"{key}=" in text:
-            text = re.sub(rf"{key}=([^,\)]+)", f"{key}={value}", text)
+        # Anchor to the start of an entry so a quoted value that merely contains
+        # "RCONPort=" (a server description, say) is left alone.
+        pattern = rf"(?<=[(,]){re.escape(key)}=([^,\)]+)"
+        if re.search(pattern, text):
+            text = re.sub(pattern, f"{key}={value}", text)
         else:
             text = text.replace("OptionSettings=(", f"OptionSettings=({key}={value},", 1)
     return text

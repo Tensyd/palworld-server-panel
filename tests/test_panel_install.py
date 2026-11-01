@@ -116,6 +116,60 @@ class PrivilegedBoundaryTests(unittest.TestCase):
         ]
         self.assertEqual(copies, [], "copied the installer onto itself")
 
+class ConfigPasswordTests(unittest.TestCase):
+    """The panel and the game must agree on the RCON password."""
+
+    def test_existing_env_password_is_written_into_the_game_config(self):
+        # A reinstall used to mint a fresh password for the game config while
+        # upsert_env() kept the old one in the env file, so RCON answered
+        # "Auth failed" forever after the second install.
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env_file = root / "palworld-panel.env"
+            env_file.write_text("RCON_PASSWORD=from-env-file" + chr(10), encoding="utf-8")
+            pal = root / "palworld"
+            cfg_dir = pal / "Pal" / "Saved" / "Config" / "LinuxServer"
+            cfg_dir.mkdir(parents=True)
+            settings = cfg_dir / "PalWorldSettings.ini"
+            settings.write_text(
+                "[/Script/Pal.PalGameWorldSettings]" + chr(10) + 'OptionSettings=(AdminPassword="stale",PublicPort=8211)' + chr(10),
+                encoding="utf-8",
+            )
+
+            with patch.object(panel_install, "ENV_FILE", env_file), patch.object(
+                panel_install, "PALWORLD_DIR", pal
+            ), patch.object(panel_install, "run_checked"), patch.object(panel_install, "status"), patch.dict(
+                os.environ, {"RCON_PASSWORD": ""}, clear=False
+            ):
+                os.environ.pop("RCON_PASSWORD", None)
+                panel_install.configure_palworld()
+
+            text = settings.read_text(encoding="utf-8")
+            self.assertIn('AdminPassword="from-env-file"', text)
+            self.assertIn("RCON_PASSWORD=from-env-file", env_file.read_text(encoding="utf-8"))
+
+    def test_reconfigure_option_ignores_key_text_inside_quotes(self):
+        text = 'OptionSettings=(ServerDescription="RCONPort=1, PublicPort=2",RCONPort=25575)'
+        result = panel_install.reconfigure_option(text, "pw")
+        self.assertIn('ServerDescription="RCONPort=1, PublicPort=2"', result)
+        self.assertIn(f"RCONPort={panel_install.RCON_PORT}", result)
+        self.assertIn('AdminPassword="pw"', result)
+
+    def test_upsert_env_keeps_values_that_are_already_set(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "panel.env"
+            path.write_text("RCON_PASSWORD=keep-me" + chr(10), encoding="utf-8")
+            with patch.object(panel_install, "run_checked"):
+                panel_install.upsert_env(path, {"RCON_PASSWORD": "new", "PANEL_PORT": "8080"})
+            values = panel_install.read_env_values(path)
+        self.assertEqual(values["RCON_PASSWORD"], "keep-me")
+        self.assertEqual(values["PANEL_PORT"], "8080")
+
 
 if __name__ == "__main__":
     unittest.main()
