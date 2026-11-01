@@ -22,7 +22,7 @@ import time
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from rcon import rcon_command as send_rcon_command
 
@@ -675,7 +675,36 @@ def _terminate_process(process: subprocess.Popen, grace: float | None = None) ->
         pass
 
 
-def _run_steamcmd_once(timeout: int) -> tuple[str, int, bool]:
+PROGRESS_RE = re.compile(
+    r"Update state \(0x[0-9a-fA-F]+\) (\w+)[^:]*progress: ([0-9.]+) \(([0-9]+) / ([0-9]+)\)"
+)
+
+
+def steam_progress_message(line: str) -> str:
+    """Turn a SteamCMD progress line into something a person can read.
+
+    SteamCMD prints `Update state (0x61) downloading, progress: 48.20 (2377117346
+    / 4932070576)`. During a multi-gigabyte download that was the only signal
+    available and it went to the log file, not to the panel -- the progress
+    window kept showing whatever the previous step said.
+    """
+    match = PROGRESS_RE.search(line)
+    if not match:
+        return ""
+    state, percent, done, total = match.groups()
+    label = {
+        "downloading": "下载中",
+        "verifying": "校验中",
+        "preallocating": "预分配中",
+    }.get(state.lower(), "更新中")
+    total_bytes = int(total)
+    done_bytes = int(done)
+    if total_bytes <= 0:
+        return f"{label} {percent}%"
+    return f"{label} {percent}% ({done_bytes / 1e9:.1f}/{total_bytes / 1e9:.1f} GB)"
+
+
+def _run_steamcmd_once(timeout: int, on_progress: Callable[[str], None] | None = None) -> tuple[str, int, bool]:
     command = steam_update_command()
     log("steamcmd: " + " ".join(command))
     lines: list[str] = []
@@ -705,6 +734,10 @@ def _run_steamcmd_once(timeout: int) -> tuple[str, int, bool]:
             if not line:
                 continue
             log("steamcmd: " + line)
+            if on_progress is not None and "progress:" in line:
+                message = steam_progress_message(line)
+                if message:
+                    on_progress(message)
             lines.append(line)
             if len(lines) > 400:
                 del lines[0]
@@ -733,8 +766,21 @@ def run_steam_update(expected_manifest: str = "") -> None:
     last_timeout = False
 
     for attempt in range(1, attempts + 1):
-        status.step("update", "active", f"SteamCMD 更新中（第 {attempt}/{attempts} 次尝试）")
-        last_output, last_code, last_timeout = _run_steamcmd_once(STEAMCMD_ATTEMPT_TIMEOUT)
+        prefix = f"第 {attempt}/{attempts} 次"
+        status.step("update", "active", f"SteamCMD {prefix}：正在连接 Steam...")
+        last_progress = {"at": 0.0, "text": ""}
+
+        def report_progress(message: str, prefix: str = prefix, state: dict = last_progress) -> None:
+            # Throttled: a status write per progress line would hammer the file
+            # (SteamCMD emits one every second or two during a download).
+            now = time.monotonic()
+            if now - state["at"] < 3 and message == state["text"]:
+                return
+            state["at"] = now
+            state["text"] = message
+            status.step("update", "active", f"SteamCMD {prefix}：{message}")
+
+        last_output, last_code, last_timeout = _run_steamcmd_once(STEAMCMD_ATTEMPT_TIMEOUT, report_progress)
         local_manifest = parse_local_manifest().get("manifest", "")
         installed = not expected_manifest or local_manifest == expected_manifest
         reported_failure = last_code != 0 or last_timeout or steamcmd_reported_failure(last_output)
@@ -752,7 +798,11 @@ def run_steam_update(expected_manifest: str = "") -> None:
         if needs_manifest_reset(last_output):
             reset_stale_manifest()
 
-        status.step("update", "active", f"SteamCMD 第 {attempt} 次失败，{STEAMCMD_RETRY_DELAY}s 后重试")
+        status.step(
+            "update",
+            "active",
+            f"第 {attempt}/{attempts} 次未成功，{STEAMCMD_RETRY_DELAY}s 后自动重试（还有 {attempts - attempt} 次机会）",
+        )
         log(f"SteamCMD attempt {attempt}/{attempts} failed (exit={last_code}, timeout={last_timeout}); retrying")
         time.sleep(STEAMCMD_RETRY_DELAY)
 

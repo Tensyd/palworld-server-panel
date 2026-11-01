@@ -190,7 +190,7 @@ class PanelUpdateTests(unittest.TestCase):
     def test_run_steam_update_retries_after_resetting_stale_manifest(self):
         attempts = []
 
-        def fake_attempt(_timeout):
+        def fake_attempt(_timeout, on_progress=None):
             attempts.append(1)
             if len(attempts) == 1:
                 return "ERROR! Failed to install app '2394010' (Access Denied)", 0, False
@@ -332,6 +332,57 @@ class PanelUpdateTests(unittest.TestCase):
                 raise PermissionError(13, "Permission denied")
 
         self.assertFalse(panel_update.path_exists(Unreadable()))
+
+    def test_steamcmd_progress_is_turned_into_a_readable_message(self):
+        self.assertEqual(
+            panel_update.steam_progress_message(
+                " Update state (0x61) downloading, progress: 48.20 (2377117346 / 4932070576)"
+            ),
+            "下载中 48.20% (2.4/4.9 GB)",
+        )
+        self.assertEqual(
+            panel_update.steam_progress_message(
+                " Update state (0x81) verifying update, progress: 25.76 (1270648141 / 4932070576)"
+            ),
+            "校验中 25.76% (1.3/4.9 GB)",
+        )
+        self.assertEqual(panel_update.steam_progress_message("Success! App '2394010' fully installed."), "")
+
+    def test_download_progress_reaches_the_step_message(self):
+        # The progress window used to keep showing the previous step's text for
+        # the whole multi-gigabyte download, because SteamCMD's progress lines
+        # only went to the log file.
+        messages: list[str] = []
+
+        def fake_attempt(timeout, on_progress=None):
+            if on_progress:
+                on_progress("下载中 48% (2.4/4.9 GB)")
+            return "Success!", 0, False
+
+        with patch.object(panel_update, "_run_steamcmd_once", side_effect=fake_attempt), patch.object(
+            panel_update, "parse_local_manifest", return_value={"manifest": "m1"}
+        ), patch.object(panel_update.status, "step", side_effect=lambda name, status, message="": messages.append(message)), patch.object(
+            panel_update, "log"
+        ):
+            panel_update.run_steam_update("m1")
+
+        self.assertTrue(any("下载中" in message for message in messages), messages)
+
+    def test_a_failed_attempt_announces_a_retry_not_a_failure(self):
+        messages: list[str] = []
+        results = [("ERROR! Failed to install app '2394010' (Access Denied)", 0, False), ("Success!", 0, False)]
+
+        with patch.object(panel_update, "_run_steamcmd_once", side_effect=lambda timeout, cb=None: results.pop(0)), patch.object(
+            panel_update, "parse_local_manifest", return_value={"manifest": "m1"}
+        ), patch.object(panel_update.status, "step", side_effect=lambda name, status, message="": messages.append(message)), patch.object(
+            panel_update, "needs_manifest_reset", return_value=False
+        ), patch.object(panel_update, "log"), patch.object(panel_update.time, "sleep"):
+            panel_update.run_steam_update("m1")
+
+        retry_messages = [message for message in messages if "自动重试" in message]
+        self.assertTrue(retry_messages, messages)
+        self.assertIn("还有 2 次机会", retry_messages[0])
+        self.assertNotIn("失败", "".join(retry_messages), "the retry notice must not read as a final failure")
 
 
 if __name__ == "__main__":
